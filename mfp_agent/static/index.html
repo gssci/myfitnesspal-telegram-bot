@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyFitnessPal Agent</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #f2f5ed; color: #182018; display: grid; place-items: center; }
+    main { width: min(820px, 100%); height: min(800px, 100vh); background: #fff; display: grid; grid-template-rows: auto 1fr auto; box-shadow: 0 18px 60px #2030201c; }
+    header { padding: 22px 26px; border-bottom: 1px solid #e6eadf; }
+    h1 { font-size: 19px; margin: 0 0 5px; }
+    header p { margin: 0; color: #687064; font-size: 13px; }
+    #messages { padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+    .message { max-width: 82%; padding: 12px 15px; border-radius: 15px; line-height: 1.5; white-space: pre-wrap; }
+    .user { align-self: end; background: #26733d; color: white; border-bottom-right-radius: 4px; }
+    .assistant { align-self: start; background: #eef2e9; border-bottom-left-radius: 4px; }
+    form { padding: 18px 22px 22px; border-top: 1px solid #e6eadf; display: flex; gap: 10px; }
+    textarea { flex: 1; resize: none; border: 1px solid #ccd3c6; border-radius: 12px; padding: 12px; font: inherit; min-height: 48px; }
+    textarea:focus { outline: 2px solid #26733d33; border-color: #26733d; }
+    button { border: 0; border-radius: 12px; background: #26733d; color: white; padding: 0 20px; font-weight: 650; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: wait; }
+    @media (max-width: 600px) { main { height: 100vh; } .message { max-width: 92%; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>MyFitnessPal Agent</h1><p>Local Ollama model · MyFitnessPal MCP tools</p></header>
+    <section id="messages" aria-live="polite">
+      <div class="message assistant">Hi! Ask me about your food diary or nutrition data.</div>
+    </section>
+    <form id="form">
+      <textarea id="input" rows="1" placeholder="What did I eat yesterday?" required></textarea>
+      <button id="send" type="submit">Send</button>
+    </form>
+  </main>
+  <script>
+    const form = document.querySelector('#form');
+    const input = document.querySelector('#input');
+    const send = document.querySelector('#send');
+    const messages = document.querySelector('#messages');
+    let sessionId = localStorage.getItem('mfp-session');
+
+    function addMessage(text, role) {
+      const item = document.createElement('div');
+      item.className = `message ${role}`;
+      item.textContent = text;
+      messages.appendChild(item);
+      messages.scrollTop = messages.scrollHeight;
+      return item;
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const message = input.value.trim();
+      if (!message) return;
+      addMessage(message, 'user');
+      input.value = '';
+      send.disabled = true;
+      const pending = addMessage('Thinking…', 'assistant');
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({message, session_id: sessionId})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Request failed');
+        pending.textContent = data.answer;
+        sessionId = data.session_id;
+        localStorage.setItem('mfp-session', sessionId);
+      } catch (error) {
+        pending.textContent = `Error: ${error.message}`;
+      } finally {
+        send.disabled = false;
+        input.focus();
+      }
+    });
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); }
+    });
+  </script>
+</body>
+</html>

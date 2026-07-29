@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "myfitnesspal": {
+      "command": "/Users/savioscibetta/projects/mine/myfitnesspal-mcp-python/venv/bin/python",
+      "args": ["-m", "mfp_mcp.server"],
+      "transport": "stdio",
+      "env": {
+        "MFP_USERNAME": "${MFP_USERNAME}",
+        "MFP_PASSWORD": "${MFP_PASSWORD}"
+      }
+    }
+  }
+}
