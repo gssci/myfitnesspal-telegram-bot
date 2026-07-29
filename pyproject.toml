@@ -12,12 +12,14 @@ dependencies = [
     "matplotlib>=3.9",
     "mcp>=1.25,<2",
     "python-dotenv>=1.1",
+    "python-telegram-bot>=22.5,<23",
     "uvicorn[standard]>=0.35",
 ]
 
 [project.scripts]
 mfp-agent = "mfp_agent.cli:main"
 mfp-chat = "mfp_agent.web:main"
+mfp-telegram = "mfp_agent.telegram:main"
 
 [build-system]
 requires = ["hatchling"]

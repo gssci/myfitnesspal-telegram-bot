@@ -21,19 +21,37 @@ cp .env.example .env  # skip this if .env already exists
 Set `MFP_USERNAME` and `MFP_PASSWORD` in `.env`. The checked-in `mcp.json` uses
 `${...}` placeholders, so credentials are not stored in source control.
 
-Start the browser chat:
+Telegram is the primary agent interface. Create a bot with BotFather and add its
+token to the untracked `.env` file:
 
-```bash
-uv run mfp-chat
+```dotenv
+TELEGRAM_BOT_TOKEN=replace-with-your-token
+# Required for access (comma-separated numeric IDs):
+TELEGRAM_ALLOWED_USER_IDS=123456789
+MFP_CHAT_HISTORY_TURNS=6
 ```
 
-Then open <http://127.0.0.1:8000>. The health endpoint at
-<http://127.0.0.1:8000/api/health> lists the MCP tools loaded at startup.
-
-For a terminal chat instead:
+Start the Telegram long-polling interface with:
 
 ```bash
-uv run mfp-agent
+uv run mfp-telegram
+```
+
+The bot is closed by default. With no allowed IDs configured, `/start` reports
+the sender's own numeric Telegram ID but all agent requests are denied. Send
+`/start`, add your ID to `TELEGRAM_ALLOWED_USER_IDS`, and restart the process.
+Only listed users can then reach the agent. Normal text is forwarded to the same
+LangChain agent used by the browser and terminal interfaces. Recent context is
+isolated by Telegram chat and user; `/reset` clears it. History is held in
+process memory, so restarting the bot also clears it.
+`MFP_CHAT_HISTORY_TURNS` controls the number of recent turns retained for all
+interfaces (default: 6).
+
+The browser and terminal interfaces remain available as development aids:
+
+```bash
+uv run mfp-chat  # browser chat at http://127.0.0.1:8000
+uv run mfp-agent # terminal chat
 ```
 
 Configuration can be changed in `.env` (`OLLAMA_MODEL`, `OLLAMA_BASE_URL`) and
@@ -74,6 +92,16 @@ is genuinely required.
 When the user supplies a weight in grams, search results exposing a gram serving
 are preferred and the original amount is passed to the MCP tool with `unit="g"`.
 The tool handles MyFitnessPal's internal serving multiplier automatically.
+
+Before global search, the agent now checks MyFitnessPal's meal-specific recent
+and frequent lists (0 Breakfast, 1 Lunch, 2 Dinner, 3 Snacks). A matching
+history item is resolved to the modern food ID and nutrition-checked; global
+search remains the fallback when no match can be resolved.
+
+Database results are treated as untrusted user-contributed data. Search and
+history resolution report energy-density plausibility, and the MCP write path
+refuses physically impossible records such as an olive-oil entry claiming 800
+kcal per gram.
 
 Create a compact, one-page landscape A4 PDF from a MyFitnessPal **Nutrition Summary** CSV export. The report has seven day columns, each with total consumed calories, a protein/carbohydrate/fat energy pie chart, macro grams and percentages, fibre and sodium totals, and a meal-level calorie/macro summary.
 

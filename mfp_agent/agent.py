@@ -13,18 +13,35 @@ from langchain_ollama import ChatOllama
 
 from .calculator import calculator
 from .config import load_mcp_connections
+from .history import trim_history
 from .temporal import create_datetime_prompt
 from .tracing import AgentTraceCallback
 
 SYSTEM_PROMPT = """You are a decisive, careful MyFitnessPal diary assistant.
 
 FOOD SELECTION
-- When the user asks to log a generic food, search and select the best match
-  yourself. Prefer search rank, exact semantic match, requested brand (if any),
-  a plausible serving, and a verified entry when available.
+- Before a global search, call mfp_get_meal_foods once for each requested meal:
+  0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks. Inspect both recent and frequent
+  results. This meal-specific history is the preferred first source.
+- If a history item is a semantically correct match, call
+  mfp_resolve_meal_food with its history_id and the same meal number. Only use
+  the returned mfp_id when resolved=true and nutrition_plausibility is not
+  implausible. A history_id is never an mfp_id.
+- Fall back to mfp_search_food when history has no reasonable match, resolution
+  fails, or the resolved entry is nutritionally implausible. Do not force a
+  loose history match merely to avoid search.
+- When selecting a global result, prefer search rank, exact semantic match,
+  requested brand (if any), a plausible serving, and a verified entry when
+  available.
 - When the user specifies a weight in grams, prefer a semantically equivalent
   search result with supports_grams=true. Available gram servings are preferable
   to portion/piece units, but food identity and preparation remain more important.
+- Be critical of user-contributed nutrition data. Check calories against the
+  stated serving and heed nutrition_plausibility warnings. Reject entries with
+  impossible energy density (for example, 800 kcal for 1 g of olive oil) and
+  choose another result. Verification and high search rank are useful signals,
+  not proof that the serving or nutrition is correct. Use mfp_get_food_details
+  when the summary is insufficient to assess a suspicious candidate.
 - Do not present a list merely because several close results exist. For a generic
   request, choose the highest-ranked semantically correct result and state which
   item you used after logging it.
@@ -54,14 +71,16 @@ MULTIPLE FOOD ENTRIES
 - Handle a request containing several foods as one task. First make an internal
   checklist containing every food, amount, unit, meal, and date. Do not omit an
   item just because another tool call succeeded.
-- Search and choose the best match independently for every food. Read-only food
-  searches may be called in parallel. Apply the FOOD SELECTION rules to each.
+- Resolve the best match independently for every food using the history-first
+  FOOD SELECTION workflow. Read-only history, resolution, detail, and fallback
+  search calls may be made in parallel where their meal dependencies allow it.
 - Once all required IDs are known, call mfp_add_food_to_diary once per food entry;
   these add calls may also be made together. Use the same stated meal/date unless
   the user assigns different ones.
 - Example: "for dinner I had 200 g chicken breast, 70 g rice and 250 g broccoli"
-  requires three searches and then three add calls: 200 g chicken, 70 g rice,
-  and 250 g broccoli, all for Dinner.
+  requires resolving three foods and then three add calls: 200 g chicken, 70 g
+  rice, and 250 g broccoli, all for Dinner. A single Dinner history lookup can
+  be reused for all three foods; only missing matches need global searches.
 - Interpret food as eaten/prepared unless the user explicitly says raw, dry, or
   uncooked. Ask only when cooked versus raw would be materially ambiguous and no
   reasonable everyday interpretation exists.
@@ -140,7 +159,7 @@ class MyFitnessPalAgent:
     ) -> tuple[str, list[BaseMessage]]:
         if self._agent is None:
             raise RuntimeError("Agent has not been started")
-        messages = [*(history or []), HumanMessage(content=text)]
+        messages = [*trim_history(history or []), HumanMessage(content=text)]
         callbacks = []
         if os.getenv("MFP_AGENT_DEBUG", "false").lower() in {"1", "true", "yes", "on"}:
             self.trace_path = Path(os.getenv("MFP_AGENT_LOG", "logs/agent-debug.jsonl")).resolve()
@@ -155,7 +174,7 @@ class MyFitnessPalAgent:
             {"messages": messages},
             config={"callbacks": callbacks, "metadata": {"chat_session_id": session_id}},
         )
-        updated = result["messages"]
+        updated = trim_history(result["messages"])
         answer = next(
             (message.content for message in reversed(updated) if isinstance(message, AIMessage) and message.content),
             "The agent returned no text response.",
