@@ -22,3 +22,12 @@ def test_prompt_uses_meal_history_before_global_search():
 def test_prompt_rejects_implausible_nutrition():
     assert "800 kcal for 1 g of olive oil" in SYSTEM_PROMPT
     assert "Reject entries with\n  impossible energy density" in SYSTEM_PROMPT
+
+
+def test_prompt_requires_telegram_legacy_markdown():
+    assert "TELEGRAM LEGACY MARKDOWN OUTPUT" in SYSTEM_PROMPT
+    assert "legacy Markdown parse mode" in SYSTEM_PROMPT
+    assert "*bold*, _italic_, [link text](https://example.com)" in SYSTEM_PROMPT
+    assert r"as \_ \* \` \[" in SYSTEM_PROMPT
+    assert "Plain `- item` bullets" in SYSTEM_PROMPT
+    assert "Valid success example" in SYSTEM_PROMPT

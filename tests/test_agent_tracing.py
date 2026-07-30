@@ -3,7 +3,19 @@ from uuid import uuid4
 
 from langchain_core.messages import ToolMessage
 
-from mfp_agent.tracing import AgentTraceCallback
+from mfp_agent.tracing import AgentTraceCallback, _safe
+
+
+def test_audio_data_is_always_redacted_from_traces():
+    value = {
+        "type": "input_audio",
+        "input_audio": {"data": "base64 audio", "format": "wav"},
+    }
+
+    assert _safe(value) == {
+        "type": "input_audio",
+        "input_audio": {"data": "[REDACTED AUDIO]", "format": "wav"},
+    }
 
 
 def test_tool_calls_are_written_as_json_lines(tmp_path):

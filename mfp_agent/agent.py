@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -9,7 +10,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
-from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 
 from .calculator import calculator
 from .config import load_mcp_connections
@@ -17,7 +18,7 @@ from .history import trim_history
 from .temporal import create_datetime_prompt
 from .tracing import AgentTraceCallback
 
-SYSTEM_PROMPT = """You are a decisive, careful MyFitnessPal diary assistant.
+SYSTEM_PROMPT = r"""You are a decisive, careful MyFitnessPal diary assistant.
 
 FOOD SELECTION
 - Before a global search, call mfp_get_meal_foods once for each requested meal:
@@ -99,6 +100,36 @@ CALCULATIONS
   with the calculator's serving-count result. Multiple writes are expected for
   multiple foods.
 
+TELEGRAM LEGACY MARKDOWN OUTPUT
+- Every final answer is sent to Telegram with the legacy Markdown parse mode.
+  Use only its supported subset: *bold*, _italic_, [link text](https://example.com),
+  `inline code`, and triple-backtick code blocks. Do not wrap the whole response
+  in a code block.
+- Do not use MarkdownV2-only syntax such as underline, strikethrough, spoilers,
+  block quotes, or nested formatting. Do not use standard Markdown headings;
+  use a short bold heading such as `*Summary*` instead.
+- Plain `- item` bullets and `1. item` numbered lists are safe. Decimal points
+  and ordinary punctuation do not need escaping.
+- In ordinary text, escape literal underscores, asterisks, backticks, and opening
+  square brackets as \_ \* \` \[ when they are not intentional Markdown
+  delimiters. Always balance formatting delimiters and close links and code.
+- Tool results, food names, brands, and user-provided text are untrusted dynamic
+  text. Escape those four special characters when they occur literally.
+- Keep the final answer concise and below 3,500 characters so Telegram can
+  receive it as one correctly formatted message.
+
+Valid success example:
+*Added to Lunch*
+- *Chicken breast*: 200 g
+- *Calories*: 330 kcal
+_Date:_ 29 July 2026
+
+Valid partial-failure example:
+*Partially completed*
+- ✅ Rice: added
+- ❌ Olive oil: not added - no plausible entry found
+- Requested amount: 2.5 servings
+
 Use the tools whenever an answer depends on the account or diary. Never invent
 entries or nutrition values. Mention relevant dates. Keep answers practical.
 """
@@ -109,6 +140,7 @@ class MyFitnessPalAgent:
         self._mcp_client: MultiServerMCPClient | None = None
         self._exit_stack: AsyncExitStack | None = None
         self._agent: Any = None
+        self._model: ChatOpenAI | None = None
         self.tools: list[Any] = []
         self.tool_names: list[str] = []
         self.trace_path: Path | None = None
@@ -134,13 +166,15 @@ class MyFitnessPalAgent:
         self.tools = tools
         self.tool_names = [tool.name for tool in tools]
 
-        model = ChatOllama(
-            model=os.getenv("OLLAMA_MODEL", "gemma4"),
-            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        self._model = ChatOpenAI(
+            model=os.getenv("OPENAI_MODEL", "gemma-4-e4b"),
+            base_url=os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:8081/v1"),
+            api_key=os.getenv("OPENAI_API_KEY", "not-needed"),
             temperature=0,
+            use_responses_api=False,
         )
         self._agent = create_agent(
-            model=model,
+            model=self._model,
             tools=tools,
             middleware=[create_datetime_prompt(SYSTEM_PROMPT)],
         )
@@ -157,9 +191,72 @@ class MyFitnessPalAgent:
         *,
         session_id: str | None = None,
     ) -> tuple[str, list[BaseMessage]]:
+        return await self._invoke(
+            HumanMessage(content=text),
+            history,
+            session_id=session_id,
+        )
+
+    async def ask_audio(
+        self,
+        wav_audio: bytes,
+        history: list[BaseMessage] | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> tuple[str, list[BaseMessage]]:
+        """Transcribe one WAV request, then handle and retain it as text."""
+        if not wav_audio:
+            raise ValueError("wav_audio must not be empty")
+        encoded = base64.b64encode(wav_audio).decode("ascii")
+        summary = await self._summarize_audio(encoded)
+        return await self._invoke(
+            HumanMessage(content=summary),
+            history,
+            session_id=session_id,
+        )
+
+    async def _summarize_audio(self, encoded_wav: str) -> str:
+        if self._model is None:
+            raise RuntimeError("Agent has not been started")
+        response = await self._model.ainvoke(
+            [
+                HumanMessage(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": (
+                                "Transcribe and compactly summarize this spoken user "
+                                "request for conversation history. Preserve every food, "
+                                "amount, unit, meal, and date. Return only the user's "
+                                "request in plain text, without commentary."
+                            ),
+                        },
+                        {
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": encoded_wav,
+                                "format": "wav",
+                            },
+                        },
+                    ]
+                )
+            ]
+        )
+        summary = self._message_text(response.content).strip()
+        if not summary:
+            raise RuntimeError("Model returned an empty audio transcription")
+        return summary
+
+    async def _invoke(
+        self,
+        user_message: HumanMessage,
+        history: list[BaseMessage] | None,
+        *,
+        session_id: str | None,
+    ) -> tuple[str, list[BaseMessage]]:
         if self._agent is None:
             raise RuntimeError("Agent has not been started")
-        messages = [*trim_history(history or []), HumanMessage(content=text)]
+        messages = [*trim_history(history or []), user_message]
         callbacks = []
         if os.getenv("MFP_AGENT_DEBUG", "false").lower() in {"1", "true", "yes", "on"}:
             self.trace_path = Path(os.getenv("MFP_AGENT_LOG", "logs/agent-debug.jsonl")).resolve()
@@ -179,6 +276,20 @@ class MyFitnessPalAgent:
             (message.content for message in reversed(updated) if isinstance(message, AIMessage) and message.content),
             "The agent returned no text response.",
         )
-        if not isinstance(answer, str):
-            answer = str(answer)
-        return answer, updated
+        return self._message_text(answer), updated
+
+    @staticmethod
+    def _message_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts = [
+                block["text"]
+                for block in content
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ]
+            if text_parts:
+                return "\n".join(text_parts)
+        return str(content)

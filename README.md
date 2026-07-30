@@ -1,14 +1,17 @@
 # Nutrition Summary PDF
 
-This repository also includes a local LangChain chat agent that connects Ollama
-to the MyFitnessPal MCP server. It also exposes a safe local calculator tool for
-quantity, serving, percentage, calorie, macro, and unit-conversion arithmetic.
+This repository also includes a local LangChain chat agent that connects an
+OpenAI-compatible llama-server to the MyFitnessPal MCP server. It also exposes a
+safe local calculator tool for quantity, serving, percentage, calorie, macro,
+and unit-conversion arithmetic.
 
 ## MyFitnessPal chat agent
 
 Prerequisites:
 
-- Ollama running locally with the `gemma4` model available.
+- llama-server exposing its OpenAI-compatible API at `http://127.0.0.1:8081`,
+  with the Gemma 4 multimodal projector loaded.
+- `ffmpeg` available on `PATH` for Telegram audio conversion.
 - The MyFitnessPal MCP project and Python environment at the path in `mcp.json`.
 
 Install everything and copy the environment template if needed:
@@ -40,10 +43,14 @@ uv run mfp-telegram
 The bot is closed by default. With no allowed IDs configured, `/start` reports
 the sender's own numeric Telegram ID but all agent requests are denied. Send
 `/start`, add your ID to `TELEGRAM_ALLOWED_USER_IDS`, and restart the process.
-Only listed users can then reach the agent. Normal text is forwarded to the same
-LangChain agent used by the browser and terminal interfaces. Recent context is
-isolated by Telegram chat and user; `/reset` clears it. History is held in
-process memory, so restarting the bot also clears it.
+Only listed users can then reach the agent. Text, Telegram voice messages, and
+audio files are forwarded to the LangChain agent. Audio is converted to 16 kHz
+mono 16-bit PCM WAV and Gemma 4 produces a compact, faithful transcription,
+which the tool-enabled agent handles as the user request. Requests are processed
+one at a time. After an audio response, only that textual transcription is
+retained in history; the encoded audio is discarded.
+Recent context is isolated by Telegram chat and user; `/reset` clears it.
+History is held in process memory, so restarting the bot also clears it.
 `MFP_CHAT_HISTORY_TURNS` controls the number of recent turns retained for all
 interfaces (default: 6).
 
@@ -54,8 +61,10 @@ uv run mfp-chat  # browser chat at http://127.0.0.1:8000
 uv run mfp-agent # terminal chat
 ```
 
-Configuration can be changed in `.env` (`OLLAMA_MODEL`, `OLLAMA_BASE_URL`) and
-`mcp.json` (MCP command, arguments, environment, and transport).
+Configuration can be changed in `.env` (`OPENAI_MODEL`, `OPENAI_BASE_URL`, and
+`OPENAI_API_KEY`) and `mcp.json` (MCP command, arguments, environment, and
+transport). `OPENAI_BASE_URL` must include the `/v1` suffix. The default model
+name is `gemma-4-e4b`; llama-server accepts it when serving a single model.
 
 `MFP_AGENT_TIMEZONE` controls the local time used to resolve relative dates and
 defaults to `Europe/Rome`. The current local timestamp plus explicit today,

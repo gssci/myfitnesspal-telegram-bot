@@ -5,11 +5,14 @@ import logging
 import os
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage
-from telegram import Update
-from telegram.constants import ChatAction
+from telegram import Message, Update
+from telegram.constants import ChatAction, ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -18,17 +21,21 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from telegram.helpers import escape_markdown
 
 from .agent import MyFitnessPalAgent
+from .audio import convert_to_model_wav
 from .config import PROJECT_ROOT
 
 LOGGER = logging.getLogger(__name__)
 TELEGRAM_MESSAGE_LIMIT = 4096
+TELEGRAM_MARKDOWN_CHUNK_LIMIT = 3500
+TELEGRAM_FALLBACK_CHUNK_LIMIT = 1800
 
 
 @dataclass(slots=True)
 class _AgentRequest:
-    text: str
+    content: str | bytes
     history: list[BaseMessage] | None
     session_id: str
     result: asyncio.Future[tuple[str, list[BaseMessage]]]
@@ -63,6 +70,24 @@ def split_telegram_text(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[
     if remaining:
         chunks.append(remaining)
     return chunks
+
+
+async def send_agent_response(message: Message, text: str) -> None:
+    """Send legacy Markdown, falling back to safely escaped text if parsing fails."""
+    for chunk in split_telegram_text(text, limit=TELEGRAM_MARKDOWN_CHUNK_LIMIT):
+        try:
+            await message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+        except BadRequest:
+            LOGGER.warning(
+                "Invalid legacy Markdown from agent; sending escaped fallback"
+            )
+            for fallback_chunk in split_telegram_text(
+                chunk, limit=TELEGRAM_FALLBACK_CHUNK_LIMIT
+            ):
+                await message.reply_text(
+                    escape_markdown(fallback_chunk, version=1),
+                    parse_mode=ParseMode.MARKDOWN,
+                )
 
 
 class TelegramAgentBot:
@@ -109,11 +134,18 @@ class TelegramAgentBot:
         try:
             while request := await self._requests.get():
                 try:
-                    response = await self.agent.ask(
-                        request.text,
-                        request.history,
-                        session_id=request.session_id,
-                    )
+                    if isinstance(request.content, bytes):
+                        response = await self.agent.ask_audio(
+                            request.content,
+                            request.history,
+                            session_id=request.session_id,
+                        )
+                    else:
+                        response = await self.agent.ask(
+                            request.content,
+                            request.history,
+                            session_id=request.session_id,
+                        )
                 except BaseException as exc:
                     if not request.result.done():
                         request.result.set_exception(exc)
@@ -134,7 +166,26 @@ class TelegramAgentBot:
         result = asyncio.get_running_loop().create_future()
         await self._requests.put(
             _AgentRequest(
-                text=text,
+                content=text,
+                history=history,
+                session_id=session_id,
+                result=result,
+            )
+        )
+        return await result
+
+    async def ask_agent_audio(
+        self,
+        wav_audio: bytes,
+        history: list[BaseMessage] | None,
+        session_id: str,
+    ) -> tuple[str, list[BaseMessage]]:
+        if self._worker_task is None or self._worker_task.done():
+            raise RuntimeError("Telegram agent worker is not running")
+        result = asyncio.get_running_loop().create_future()
+        await self._requests.put(
+            _AgentRequest(
+                content=wav_audio,
                 history=history,
                 session_id=session_id,
                 result=result,
@@ -176,9 +227,9 @@ class TelegramAgentBot:
             )
             return
         await message.reply_text(
-            "Send me a MyFitnessPal request in plain text. I remember the most "
-            "recent conversation turns for follow-up messages. Use /reset to "
-            "clear that context."
+            "Send me a MyFitnessPal request in text, as a voice message, or as "
+            "an audio file. I remember the most recent conversation turns for "
+            "follow-up messages. Use /reset to clear that context."
         )
 
     async def reset_command(
@@ -220,8 +271,50 @@ class TelegramAgentBot:
                 )
                 return
 
-        for chunk in split_telegram_text(answer):
-            await message.reply_text(chunk)
+        await send_agent_response(message, answer)
+
+    async def handle_audio(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        if await self._reject_if_unauthorized(update):
+            return
+        message = update.effective_message
+        chat = update.effective_chat
+        if message is None or chat is None:
+            return
+        media = message.audio or message.voice
+        if media is None:
+            return
+
+        session_id = self._session_id(update)
+        async with self._session_locks[session_id]:
+            try:
+                await context.bot.send_chat_action(
+                    chat_id=chat.id, action=ChatAction.TYPING
+                )
+                with TemporaryDirectory(prefix="mfp-audio-") as temporary_dir:
+                    source = Path(temporary_dir) / "telegram-audio"
+                    wav = Path(temporary_dir) / "model-input.wav"
+                    telegram_file = await context.bot.get_file(media.file_id)
+                    await telegram_file.download_to_drive(custom_path=source)
+                    await convert_to_model_wav(source, wav)
+                    wav_audio = wav.read_bytes()
+
+                answer, updated = await self.ask_agent_audio(
+                    wav_audio,
+                    self.histories.get(session_id),
+                    session_id,
+                )
+                self.histories[session_id] = updated
+            except Exception:
+                LOGGER.exception("Telegram audio request failed for %s", session_id)
+                await message.reply_text(
+                    "I couldn't process that audio message. Check that ffmpeg and "
+                    "the llama-server multimodal projector are available, then try again."
+                )
+                return
+
+        await send_agent_response(message, answer)
 
 
 def build_application(token: str) -> Application:
@@ -241,6 +334,9 @@ def build_application(token: str) -> Application:
     application.add_handler(CommandHandler("reset", service.reset_command))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, service.handle_text)
+    )
+    application.add_handler(
+        MessageHandler(filters.AUDIO | filters.VOICE, service.handle_audio)
     )
     return application
 

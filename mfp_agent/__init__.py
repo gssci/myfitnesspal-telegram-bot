@@ -1,1 +1,1 @@
-"""Local LangChain agent backed by Ollama and MyFitnessPal MCP tools."""
+"""Local LangChain agent backed by llama-server and MyFitnessPal MCP tools."""

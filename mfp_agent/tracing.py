@@ -23,10 +23,15 @@ def _safe(value: Any) -> Any:
             "status": getattr(value, "status", None),
         }
     if isinstance(value, dict):
-        return {
+        safe_value = {
             str(key): "[REDACTED]" if str(key).lower() in SENSITIVE_KEYS else _safe(item)
             for key, item in value.items()
         }
+        if value.get("type") == "input_audio" and isinstance(
+            safe_value.get("input_audio"), dict
+        ):
+            safe_value["input_audio"]["data"] = "[REDACTED AUDIO]"
+        return safe_value
     if isinstance(value, (list, tuple)):
         return [_safe(item) for item in value]
     if isinstance(value, UUID):
