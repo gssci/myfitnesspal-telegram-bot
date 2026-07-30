@@ -1,7 +1,7 @@
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from mfp_agent.history import get_history_turn_limit, trim_history
+from mfp_agent.history import compact_history, get_history_turn_limit, trim_history
 
 
 def test_trim_history_keeps_complete_recent_turns():
@@ -24,6 +24,20 @@ def test_trim_history_keeps_complete_recent_turns():
         "third",
         "third answer",
     ]
+
+
+def test_compact_history_drops_tool_calls_and_results():
+    messages = [
+        HumanMessage(content="Log an apple"),
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "mfp_search_food", "args": {}, "id": "call-1"}],
+        ),
+        ToolMessage(content="large search payload", tool_call_id="call-1"),
+        AIMessage(content="Added one apple."),
+    ]
+
+    assert compact_history(messages) == [messages[0], messages[3]]
 
 
 def test_history_turn_limit_from_environment(monkeypatch):

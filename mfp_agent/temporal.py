@@ -32,20 +32,12 @@ def build_temporal_context(
     today = local_now.date()
     yesterday = today - timedelta(days=1)
     tomorrow = today + timedelta(days=1)
-    return f"""CURRENT LOCAL DATE AND TIME
-- Timezone: {local_timezone.key}
-- Current local datetime: {local_now.isoformat(timespec="seconds")}
-- Today: {today.isoformat()}
-- Yesterday: {yesterday.isoformat()}
-- Tomorrow: {tomorrow.isoformat()}
-
-TEMPORAL RULES
-- Resolve relative expressions such as today, yesterday, tomorrow, tonight,
-  this morning, and last night from the anchors above.
-- When calling a tool for a resolved relative date, pass the explicit YYYY-MM-DD
-  date. Example: a request about "yesterday" must use date="{yesterday.isoformat()}".
-- Never infer the current date from training knowledge or an earlier chat turn.
-"""
+    return (
+        f"Local time: {local_now.isoformat(timespec='seconds')} ({local_timezone.key}). "
+        f"Today={today.isoformat()}, yesterday={yesterday.isoformat()}, "
+        f"tomorrow={tomorrow.isoformat()}. Resolve relative dates from these anchors "
+        "and pass explicit YYYY-MM-DD dates to tools."
+    )
 
 
 def create_datetime_prompt(base_prompt: str):

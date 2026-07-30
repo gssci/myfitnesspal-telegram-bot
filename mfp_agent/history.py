@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 DEFAULT_HISTORY_TURNS = 6
 
@@ -36,3 +36,16 @@ def trim_history(
     if len(user_message_indexes) <= limit:
         return list(messages)
     return list(messages[user_message_indexes[-limit] :])
+
+
+def compact_history(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+    """Keep user requests and final answers, dropping completed tool traces."""
+    compacted: list[BaseMessage] = []
+    for message in messages:
+        if isinstance(message, HumanMessage) or (
+            isinstance(message, AIMessage)
+            and message.content
+            and not message.tool_calls
+        ):
+            compacted.append(message)
+    return compacted

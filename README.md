@@ -1,9 +1,9 @@
 # Nutrition Summary PDF
 
 This repository also includes a local LangChain chat agent that connects an
-OpenAI-compatible llama-server to the MyFitnessPal MCP server. It also exposes a
-safe local calculator tool for quantity, serving, percentage, calorie, macro,
-and unit-conversion arithmetic.
+OpenAI-compatible llama-server to the MyFitnessPal MCP server. It exposes only
+the essential diary, food-search, reporting, and authentication tools to the
+model.
 
 ## MyFitnessPal chat agent
 
@@ -65,6 +65,7 @@ Configuration can be changed in `.env` (`OPENAI_MODEL`, `OPENAI_BASE_URL`, and
 `OPENAI_API_KEY`) and `mcp.json` (MCP command, arguments, environment, and
 transport). `OPENAI_BASE_URL` must include the `/v1` suffix. The default model
 name is `gemma-4-e4b`; llama-server accepts it when serving a single model.
+`OPENAI_MAX_TOKENS` and `MFP_AGENT_RECURSION_LIMIT` can optionally be set if response token limits or tool recursion limits are needed.
 
 `MFP_AGENT_TIMEZONE` controls the local time used to resolve relative dates and
 defaults to `Europe/Rome`. The current local timestamp plus explicit today,
@@ -101,11 +102,17 @@ is genuinely required.
 When the user supplies a weight in grams, search results exposing a gram serving
 are preferred and the original amount is passed to the MCP tool with `unit="g"`.
 The tool handles MyFitnessPal's internal serving multiplier automatically.
+Whole-item quantities use `unit="count"`, which maps to discrete database units
+such as fruit, piece, egg size, or another named item serving without requiring
+the user to provide grams.
 
-Before global search, the agent now checks MyFitnessPal's meal-specific recent
-and frequent lists (0 Breakfast, 1 Lunch, 2 Dinner, 3 Snacks). A matching
-history item is resolved to the modern food ID and nutrition-checked; global
-search remains the fallback when no match can be resolved.
+The agent checks meal-specific recent and frequent entries before global search.
+A matching history item is resolved to a current food ID; the server caches that
+lookup briefly so resolution does not repeat the recent/frequent HTTP requests.
+
+Completed internal tool calls and their potentially large results are removed
+from retained chat history. User messages and final answers remain available for
+conversation continuity without resending old tool payloads.
 
 Database results are treated as untrusted user-contributed data. Search and
 history resolution report energy-density plausibility, and the MCP write path
