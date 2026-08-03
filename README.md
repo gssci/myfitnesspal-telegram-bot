@@ -5,12 +5,19 @@ A local LangChain chat agent that connects an OpenAI-compatible llama-server
 Telegram bot. It exposes only the essential diary, food-search, reporting,
 and authentication tools to the model.
 
+The tools the agent calls are implemented by
+[myfitnesspal-mcp-python](https://github.com/gssci/myfitnesspal-mcp-python),
+a fork of [AdamWalt/myfitnesspal-mcp-python](https://github.com/AdamWalt/myfitnesspal-mcp-python).
+That project must be cloned and set up separately; this repo only talks to it
+over MCP per the configuration in `mcp.json`.
+
 ## Prerequisites
 
 - llama-server exposing its OpenAI-compatible API at `http://127.0.0.1:8081`,
   with the Gemma 4 multimodal projector loaded.
 - `ffmpeg` available on `PATH` for Telegram audio conversion.
-- The MyFitnessPal MCP project and Python environment at the path in `mcp.json`.
+- The [myfitnesspal-mcp-python](https://github.com/gssci/myfitnesspal-mcp-python)
+  project and its Python environment set up at the path referenced in `mcp.json`.
 
 ## Setup
 
