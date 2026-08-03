@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Any
 from uuid import UUID
 
@@ -11,6 +13,9 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import BaseMessage
 
 SENSITIVE_KEYS = {"password", "token", "authorization", "cookie", "secret", "api_key"}
+TOOL_LOGGER = logging.getLogger("mfp_agent.tools")
+_ARG_PREVIEW_LIMIT = 80
+_RESULT_PREVIEW_LIMIT = 200
 
 
 def _safe(value: Any) -> Any:
@@ -41,6 +46,80 @@ def _safe(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return _safe(value.model_dump())
     return str(value)
+
+
+def _truncate(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _flatten_tool_args(inputs: Any) -> dict[str, Any]:
+    """Unwrap the MCP adapter's {"params": {...}} envelope for readable logs."""
+    if isinstance(inputs, dict) and set(inputs) == {"params"} and isinstance(inputs["params"], dict):
+        return inputs["params"]
+    return inputs if isinstance(inputs, dict) else {"input": inputs}
+
+
+def _format_tool_args(inputs: Any) -> str:
+    safe_args = _safe(_flatten_tool_args(inputs))
+    if not isinstance(safe_args, dict) or not safe_args:
+        return ""
+    return ", ".join(f"{key}={_truncate(str(value), _ARG_PREVIEW_LIMIT)}" for key, value in safe_args.items())
+
+
+def _format_tool_result(output: Any) -> str:
+    content = getattr(output, "content", output)
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and "text" in block:
+                parts.append(str(block["text"]))
+            else:
+                parts.append(str(block))
+        content = " | ".join(parts)
+    return _truncate(str(content), _RESULT_PREVIEW_LIMIT)
+
+
+class ToolCallLogger(BaseCallbackHandler):
+    """Always-on, human-readable log line for every tool call.
+
+    AgentTraceCallback below writes a complete JSONL trace, but it is opt-in
+    (MFP_AGENT_DEBUG) and meant for after-the-fact debugging. This callback
+    goes through the standard `logging` module instead, so a one-line summary
+    of every tool call — name, arguments, result preview, and timing — shows
+    up live wherever the process already logs (terminal, systemd journal,
+    Telegram bot logs), regardless of debug mode.
+    """
+
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        self._logger = logger or TOOL_LOGGER
+        self._started: dict[UUID, tuple[str, float]] = {}
+
+    def on_tool_start(
+        self,
+        serialized: dict[str, Any],
+        input_str: str,
+        *,
+        run_id: UUID,
+        inputs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        name = serialized.get("name", "unknown_tool")
+        self._started[run_id] = (name, monotonic())
+        args = _format_tool_args(inputs if inputs is not None else input_str)
+        self._logger.info("-> %s(%s)", name, args)
+
+    def on_tool_end(self, output: Any, *, run_id: UUID, **kwargs: Any) -> None:
+        name, started = self._started.pop(run_id, ("unknown_tool", monotonic()))
+        elapsed = monotonic() - started
+        self._logger.info("<- %s (%.2fs): %s", name, elapsed, _format_tool_result(output))
+
+    def on_tool_error(self, error: BaseException, *, run_id: UUID, **kwargs: Any) -> None:
+        name, started = self._started.pop(run_id, ("unknown_tool", monotonic()))
+        elapsed = monotonic() - started
+        self._logger.error(
+            "x %s (%.2fs) raised %s: %s", name, elapsed, type(error).__name__, error
+        )
 
 
 class AgentTraceCallback(BaseCallbackHandler):

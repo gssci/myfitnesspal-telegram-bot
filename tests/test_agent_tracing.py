@@ -1,9 +1,10 @@
 import json
+import logging
 from uuid import uuid4
 
 from langchain_core.messages import ToolMessage
 
-from mfp_agent.tracing import AgentTraceCallback, _safe
+from mfp_agent.tracing import AgentTraceCallback, ToolCallLogger, _safe
 
 
 def test_audio_data_is_always_redacted_from_traces():
@@ -50,3 +51,47 @@ def test_sensitive_fields_are_redacted(tmp_path):
     )
     record = json.loads(path.read_text())
     assert record["inputs"] == {"password": "[REDACTED]", "value": "safe"}
+
+
+def test_tool_call_logger_logs_name_args_and_result(caplog):
+    caplog.set_level(logging.INFO, logger="mfp_agent.tools")
+    callback = ToolCallLogger()
+    run_id = uuid4()
+
+    callback.on_tool_start(
+        {"name": "mfp_add_food_to_diary"},
+        "",
+        run_id=run_id,
+        inputs={"params": {"mfp_id": "abc123", "meal": "Breakfast", "amount": 250, "unit": "g"}},
+    )
+    callback.on_tool_end(
+        ToolMessage(content="Successfully added 250 g of Banana to Breakfast", tool_call_id="call-1"),
+        run_id=run_id,
+    )
+
+    messages = [record.message for record in caplog.records]
+    assert any(
+        "mfp_add_food_to_diary(mfp_id=abc123, meal=Breakfast, amount=250, unit=g)" in msg
+        for msg in messages
+    )
+    assert any("Successfully added 250 g of Banana to Breakfast" in msg for msg in messages)
+
+
+def test_tool_call_logger_redacts_and_reports_errors(caplog):
+    caplog.set_level(logging.INFO, logger="mfp_agent.tools")
+    callback = ToolCallLogger()
+    run_id = uuid4()
+
+    callback.on_tool_start(
+        {"name": "refresh_browser_cookies"},
+        "",
+        run_id=run_id,
+        inputs={"params": {"token": "super-secret"}},
+    )
+    callback.on_tool_error(RuntimeError("session expired"), run_id=run_id)
+
+    messages = [record.message for record in caplog.records]
+    assert not any("super-secret" in msg for msg in messages)
+    assert any("[REDACTED]" in msg for msg in messages)
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("refresh_browser_cookies" in r.message and "session expired" in r.message for r in error_records)

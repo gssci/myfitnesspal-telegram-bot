@@ -1,3 +1,5 @@
+Esempio: uv run python nutrition_summary_pdf.py /Users/savioscibetta/Downloads/File-Export-2026-07-27-to-2026-08-02/Nutrition-Summary-2026-07-27-to-2026-08-02.csv --health-csv /Users/savioscibetta/Downloads/health_export_summary_20260802.csv --language italian --output riepilogo-nutrizione-e-salute-2026-07-27-al-2026-08-02.pdf
+
 # Nutrition Summary PDF
 
 This repository also includes a local LangChain chat agent that connects an
@@ -37,8 +39,26 @@ MFP_CHAT_HISTORY_TURNS=6
 Start the Telegram long-polling interface with:
 
 ```bash
-uv run mfp-telegram
+uv run mfp-telegram                # llama-server backend (default)
+uv run mfp-telegram llama-server   # same, explicit
+uv run mfp-telegram ollama         # local Ollama server instead
 ```
+
+The backend picks which local LLM server the agent talks to; both use the
+`gemma-4-e4b` model. `llama-server` (the default) talks to a local llama-server
+OpenAI-compatible endpoint (`OPENAI_BASE_URL`, `OPENAI_MODEL`,
+`OPENAI_API_KEY`). `ollama` talks to a local Ollama server instead
+(`OLLAMA_BASE_URL`, default `http://127.0.0.1:11434`; `OLLAMA_MODEL`). The
+choice can also be set with `MFP_MODEL_BACKEND=ollama` in `.env` instead of a
+command-line argument; an explicit argument wins. Selecting `ollama` requires
+`langchain-ollama`, already listed in `pyproject.toml` — run `uv sync` after
+pulling this change.
+
+If the bot process crashes (unhandled exception, MCP/LLM server unreachable at
+startup, etc.), it relaunches itself automatically with exponential backoff
+(5s, 10s, 20s, ... capped at 5 minutes; the backoff resets after a run stays up
+for at least a minute). A clean stop (Ctrl+C / SIGTERM) exits normally without
+restarting.
 
 The bot is closed by default. With no allowed IDs configured, `/start` reports
 the sender's own numeric Telegram ID but all agent requests are denied. Send
@@ -72,12 +92,32 @@ defaults to `Europe/Rome`. The current local timestamp plus explicit today,
 yesterday, and tomorrow dates are regenerated before every model call, so a
 long-running server remains correct across midnight and daylight-saving changes.
 
-### Debug agent decisions and tool calls
+### See what the agent and its tools are doing
 
-Set `MFP_AGENT_DEBUG=true` in `.env` (enabled in the local setup). Each model
-decision, exact MCP tool arguments, result, run ID, and error is written as JSON
-Lines to `logs/agent-debug.jsonl`. Credentials and common secret fields are
-redacted. Follow the trace while chatting with:
+Every tool call is logged live, regardless of debug mode. Each entry point
+(`mfp-agent`, `mfp-chat`, the Telegram bot) configures logging the same way via
+`LOG_LEVEL` (defaults to `INFO`), so a normal run already prints one line per
+tool call and one per request:
+
+```text
+2026-08-01 12:00:01 INFO mfp_agent: session=telegram:1:1 request started
+2026-08-01 12:00:02 INFO mfp_agent.tools: -> mfp_search_food(query=banana)
+2026-08-01 12:00:03 INFO mfp_agent.tools: <- mfp_search_food (0.84s): {"query": "banana", "count": 5, ...}
+2026-08-01 12:00:04 INFO mfp_agent.tools: -> mfp_add_food_to_diary(mfp_id=abc123, meal=Breakfast, amount=120, unit=g)
+2026-08-01 12:00:04 INFO mfp_agent.tools: <- mfp_add_food_to_diary (0.31s): Successfully added 120 g of Banana to Breakfast
+2026-08-01 12:00:04 INFO mfp_agent: session=telegram:1:1 request finished in 3.10s
+```
+
+Sensitive fields (passwords, tokens, cookies, secrets) are always redacted, and
+long arguments/results are truncated to keep each line readable. The
+`myfitnesspal` MCP server logs the same way on its own side (tool name,
+arguments, timing, and a result preview), including a WARNING for any tool that
+returns a caught error string instead of raising — those lines show up
+alongside the agent's, since the server runs as a subprocess of the agent.
+
+For deeper, structured debugging (full JSON per model decision and tool call,
+including run IDs) set `MFP_AGENT_DEBUG=true` in `.env` (enabled in the local
+setup). That trace is written as JSON Lines to `logs/agent-debug.jsonl`:
 
 ```bash
 tail -f logs/agent-debug.jsonl

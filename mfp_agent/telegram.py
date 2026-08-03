@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import os
+import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,14 +26,23 @@ from telegram.ext import (
 )
 from telegram.helpers import escape_markdown
 
-from .agent import MyFitnessPalAgent
+from .agent import DEFAULT_BACKEND, SUPPORTED_BACKENDS, MyFitnessPalAgent
 from .audio import convert_to_model_wav
 from .config import PROJECT_ROOT
+from .logging_setup import configure_logging
 
 LOGGER = logging.getLogger(__name__)
 TELEGRAM_MESSAGE_LIMIT = 4096
 TELEGRAM_MARKDOWN_CHUNK_LIMIT = 3500
 TELEGRAM_FALLBACK_CHUNK_LIMIT = 1800
+
+# Auto-restart tuning: if the bot process crashes, relaunch it with
+# exponential backoff instead of exiting. The backoff resets once a run has
+# stayed healthy for RESTART_HEALTHY_UPTIME seconds, so one bad crash doesn't
+# slow down recovery from a later, unrelated one.
+DEFAULT_RESTART_DELAY = 5.0
+MAX_RESTART_DELAY = 300.0
+RESTART_HEALTHY_UPTIME = 60.0
 
 
 @dataclass(slots=True)
@@ -95,8 +107,9 @@ class TelegramAgentBot:
         self,
         agent: MyFitnessPalAgent | None = None,
         allowed_user_ids: set[int] | None = None,
+        backend: str = DEFAULT_BACKEND,
     ) -> None:
-        self.agent = agent or MyFitnessPalAgent()
+        self.agent = agent or MyFitnessPalAgent(backend=backend)
         self.allowed_user_ids = allowed_user_ids or set()
         self.histories: dict[str, list[BaseMessage]] = {}
         self._session_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -317,11 +330,11 @@ class TelegramAgentBot:
         await send_agent_response(message, answer)
 
 
-def build_application(token: str) -> Application:
+def build_application(token: str, backend: str = DEFAULT_BACKEND) -> Application:
     allowed_user_ids = parse_allowed_user_ids(
         os.getenv("TELEGRAM_ALLOWED_USER_IDS")
     )
-    service = TelegramAgentBot(allowed_user_ids=allowed_user_ids)
+    service = TelegramAgentBot(allowed_user_ids=allowed_user_ids, backend=backend)
     application = (
         ApplicationBuilder()
         .token(token)
@@ -341,18 +354,70 @@ def build_application(token: str) -> Application:
     return application
 
 
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="mfp-telegram",
+        description="Run the MyFitnessPal Telegram bot.",
+    )
+    parser.add_argument(
+        "backend",
+        nargs="?",
+        choices=SUPPORTED_BACKENDS,
+        default=os.getenv("MFP_MODEL_BACKEND", DEFAULT_BACKEND),
+        help=(
+            "LLM backend to run the agent against: 'llama-server' (default) for a "
+            "local llama-server OpenAI-compatible endpoint, or 'ollama' for a "
+            "local Ollama server. Both use the gemma-4-e4b model. Defaults to the "
+            "MFP_MODEL_BACKEND env var, or 'llama-server'."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def run_forever_with_restart(token: str, backend: str) -> None:
+    """Run the bot, automatically relaunching it if it crashes.
+
+    Application.run_polling() only returns without raising on a clean shutdown
+    (SIGINT/SIGTERM); any exception escaping it means the bot crashed
+    unexpectedly. On a crash we rebuild a fresh Application and keep polling,
+    backing off exponentially between attempts (capped at MAX_RESTART_DELAY).
+    """
+    delay = DEFAULT_RESTART_DELAY
+    attempt = 0
+    while True:
+        attempt += 1
+        started = time.monotonic()
+        try:
+            build_application(token, backend=backend).run_polling(
+                allowed_updates=Update.ALL_TYPES
+            )
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            uptime = time.monotonic() - started
+            if uptime >= RESTART_HEALTHY_UPTIME:
+                delay = DEFAULT_RESTART_DELAY
+            LOGGER.exception(
+                "Telegram bot crashed after %.1fs (attempt %d); restarting in %.0fs",
+                uptime,
+                attempt,
+                delay,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, MAX_RESTART_DELAY)
+        else:
+            LOGGER.info("Telegram bot stopped cleanly; not restarting")
+            return
+
+
 def main() -> None:
     load_dotenv(PROJECT_ROOT / ".env")
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
-    logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    # httpx logs Telegram Bot API URLs, which contain the secret token.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    build_application(token).run_polling(allowed_updates=Update.ALL_TYPES)
+    configure_logging()
+    args = _parse_args(sys.argv[1:])
+    run_forever_with_restart(token, args.backend)
 
 
 if __name__ == "__main__":

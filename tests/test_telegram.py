@@ -7,9 +7,12 @@ from langchain_core.messages import HumanMessage
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 
+from mfp_agent import telegram as telegram_module
 from mfp_agent.telegram import (
     TelegramAgentBot,
+    _parse_args,
     parse_allowed_user_ids,
+    run_forever_with_restart,
     send_agent_response,
     split_telegram_text,
 )
@@ -135,6 +138,94 @@ def test_agent_worker_processes_audio_requests_one_at_a_time():
         assert results == [("heard 5 bytes", []), ("heard 6 bytes", [])]
 
     asyncio.run(exercise())
+
+
+def test_parse_args_defaults_to_llama_server(monkeypatch):
+    monkeypatch.delenv("MFP_MODEL_BACKEND", raising=False)
+    assert _parse_args([]).backend == "llama-server"
+
+
+def test_parse_args_accepts_ollama_positional():
+    assert _parse_args(["ollama"]).backend == "ollama"
+
+
+def test_parse_args_rejects_unknown_backend():
+    with pytest.raises(SystemExit):
+        _parse_args(["bogus"])
+
+
+def test_parse_args_falls_back_to_env(monkeypatch):
+    monkeypatch.setenv("MFP_MODEL_BACKEND", "ollama")
+    assert _parse_args([]).backend == "ollama"
+
+
+def test_parse_args_explicit_arg_overrides_env(monkeypatch):
+    monkeypatch.setenv("MFP_MODEL_BACKEND", "ollama")
+    assert _parse_args(["llama-server"]).backend == "llama-server"
+
+
+def test_run_forever_with_restart_retries_after_crash(monkeypatch):
+    calls = []
+
+    class FakeApp:
+        def run_polling(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) < 3:
+                raise RuntimeError("boom")
+            return None  # clean stop on the third attempt
+
+    captured_backends = []
+
+    def fake_build_application(token, backend):
+        captured_backends.append(backend)
+        assert token == "token"
+        return FakeApp()
+
+    sleeps = []
+    monkeypatch.setattr(telegram_module, "build_application", fake_build_application)
+    monkeypatch.setattr(telegram_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    run_forever_with_restart("token", "ollama")
+
+    assert len(calls) == 3
+    assert captured_backends == ["ollama", "ollama", "ollama"]
+    assert sleeps == [
+        telegram_module.DEFAULT_RESTART_DELAY,
+        telegram_module.DEFAULT_RESTART_DELAY * 2,
+    ]
+
+
+def test_run_forever_with_restart_propagates_keyboard_interrupt(monkeypatch):
+    class FakeApp:
+        def run_polling(self, **kwargs):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        telegram_module, "build_application", lambda token, backend: FakeApp()
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_forever_with_restart("token", "llama-server")
+
+
+def test_run_forever_with_restart_stops_cleanly_without_restarting(monkeypatch):
+    calls = []
+
+    class FakeApp:
+        def run_polling(self, **kwargs):
+            calls.append(1)
+            return None
+
+    monkeypatch.setattr(
+        telegram_module, "build_application", lambda token, backend: FakeApp()
+    )
+    monkeypatch.setattr(
+        telegram_module.time, "sleep", lambda seconds: pytest.fail("should not sleep")
+    )
+
+    run_forever_with_restart("token", "llama-server")
+
+    assert calls == [1]
 
 
 def test_audio_handler_downloads_converts_and_updates_text_history(monkeypatch):

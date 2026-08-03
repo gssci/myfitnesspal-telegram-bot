@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.116",
     "langchain>=1.0",
     "langchain-mcp-adapters>=0.2",
+    "langchain-ollama>=0.3",
     "langchain-openai>=1.4.1",
     "matplotlib>=3.9",
     "mcp>=1.25,<2",
