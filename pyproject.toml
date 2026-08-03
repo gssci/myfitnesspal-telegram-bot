@@ -1,7 +1,7 @@
 [project]
-name = "nutrition-summary-pdf"
+name = "myfitnesspal-telegram-bot"
 version = "0.1.0"
-description = "Create a one-page A4 weekly nutrition report from MyFitnessPal CSV exports."
+description = "LangChain chat agent with a Telegram interface for the MyFitnessPal MCP server."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -10,7 +10,6 @@ dependencies = [
     "langchain-mcp-adapters>=0.2",
     "langchain-ollama>=0.3",
     "langchain-openai>=1.4.1",
-    "matplotlib>=3.9",
     "mcp>=1.25,<2",
     "python-dotenv>=1.1",
     "python-telegram-bot>=22.5,<23",
