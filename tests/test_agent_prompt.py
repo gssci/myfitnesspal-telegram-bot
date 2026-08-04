@@ -54,10 +54,30 @@ def test_prompt_rejects_implausible_nutrition():
 def test_prompt_preserves_weight_and_count_units():
     assert 'amount=50, unit="g"' in NORMALIZED_PROMPT
     assert 'amount=2, unit="count"' in NORMALIZED_PROMPT
-    assert "Never ask the user for a gram amount instead" in NORMALIZED_PROMPT
+    assert "never ask the user for a gram amount instead" in NORMALIZED_PROMPT
     assert (
         'Never use unit="serving" for a gram amount or an item count' in NORMALIZED_PROMPT
     )
+
+
+def test_prompt_forbids_logging_a_countable_item_as_grams():
+    # The exact failure seen in production: "2 kiwis" logged as 2 g, ~1 kcal.
+    # Showing the wrong call and its consequence teaches a small model far more
+    # than restating the right one.
+    assert 'NEVER unit="g": amount=2, unit="g" logs two grams' in NORMALIZED_PROMPT
+    assert "A whole item is never grams" in NORMALIZED_PROMPT
+
+
+def test_prompt_distrusts_supports_grams_as_a_signal_of_intent():
+    # Nearly every MFP food carries a generic "1 g" serving, so the flag says
+    # nothing about what the user asked for.
+    assert "the unit comes from the user's words, never from the food's" in NORMALIZED_PROMPT
+    assert "It never tells you the user meant grams" in NORMALIZED_PROMPT
+
+
+def test_prompt_recovers_from_a_wrong_unit_without_changing_food():
+    assert "resend the SAME food with the right unit" in NORMALIZED_PROMPT
+    assert "Only a rejection about the food itself" in NORMALIZED_PROMPT
 
 
 def test_prompt_forbids_serving_multiplier_math():
@@ -74,7 +94,7 @@ def test_prompt_supports_multiple_food_entries_and_reports_partial_failures():
 def test_prompt_checks_write_result_before_claiming_success():
     assert "Only say it succeeded if success is true AND" in NORMALIZED_PROMPT
     assert "requested_amount/requested_unit match what you sent" in NORMALIZED_PROMPT
-    assert 'Do not retry the same food with unit="serving" instead' in NORMALIZED_PROMPT
+    assert 'never fall back to unit="serving"' in NORMALIZED_PROMPT
 
 
 def test_prompt_refreshes_cookies_only_after_auth_error():
@@ -131,4 +151,6 @@ def test_prompt_shows_a_worked_confirmation_example():
 def test_prompt_stays_within_reasonable_length():
     # Generous ceiling to catch runaway bloat; the local model has a limited
     # context budget, so the prompt shouldn't grow unboundedly over time.
-    assert len(SYSTEM_PROMPT) < 5_500
+    # Raised deliberately as the answer format and the unit rules were added.
+    # Prefer tightening the wording over raising this again.
+    assert len(SYSTEM_PROMPT) < 6_000
