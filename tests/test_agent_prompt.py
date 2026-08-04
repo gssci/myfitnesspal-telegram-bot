@@ -53,30 +53,31 @@ def test_prompt_rejects_implausible_nutrition():
     assert NORMALIZED_PROMPT.count('nutrition_plausibility.status is "implausible"') >= 2
 
 
-def test_prompt_matches_the_unit_to_how_the_user_measured_the_food():
-    # Framed as a positive choice among four kinds of measurement, rather than
-    # a list of prohibitions, so the model has a rule to apply and not just
-    # mistakes to avoid.
+def test_prompt_chooses_from_the_units_the_food_itself_supports():
+    # The food's serving_options/count_units are the menu; the job is choosing
+    # the closest fit, not deciding a unit and then hoping the food takes it.
     assert (
-        "pick the unit that matches how the user measured the food" in NORMALIZED_PROMPT
-    )
-    assert 'a weight or volume ("50 g of X") -> amount=50, unit="g"' in NORMALIZED_PROMPT
-    assert 'a whole item ("1 kiwi", "2 eggs", "a banana") -> amount=1, unit="count"' in (
-        NORMALIZED_PROMPT
-    )
-    assert 'a portion they named ("2 slices", "1 cup") -> that word' in NORMALIZED_PROMPT
-
-
-def test_prompt_treats_a_named_item_serving_as_the_count_unit():
-    # The point that was missing: a food offering "1 fruit" already supports
-    # "1 kiwi". count resolves to it, so that is a match, not an obstacle.
-    assert 'unit="count" IS how you ask for a whole item' in NORMALIZED_PROMPT
-    assert "the server resolves it to whatever that food calls one item" in NORMALIZED_PROMPT
-    assert (
-        'count_units showing "fruit", "slice" or "large" already supports "1 kiwi"'
+        "the food's own serving_options and count_units ARE the units it supports"
         in NORMALIZED_PROMPT
     )
-    assert "the unit you want, not a mismatch to work around" in NORMALIZED_PROMPT
+    assert "the one that fits the user's words most closely" in NORMALIZED_PROMPT
+    assert '"1 kiwi" [fruit, g] -> amount=1, unit="fruit"' in NORMALIZED_PROMPT
+    assert "A kiwi IS one fruit" in NORMALIZED_PROMPT
+    assert '"2 slices of bread" [slice, g] -> amount=2, unit="slice"' in NORMALIZED_PROMPT
+
+
+def test_prompt_picks_the_right_item_size_rather_than_the_first():
+    # unit="count" takes the FIRST item serving, so on [small, medium, large] it
+    # would log a small banana for "1 medium banana". Naming the unit is the
+    # only way to say which item was meant.
+    assert (
+        '"1 medium banana" [small, medium, large] -> unit="medium", never "small"'
+        in NORMALIZED_PROMPT
+    )
+    assert 'Use the generic unit="count" only when no listed unit fits' in NORMALIZED_PROMPT
+    assert "it silently takes the FIRST item unit, so a name is always better" in (
+        NORMALIZED_PROMPT
+    )
 
 
 def test_prompt_still_forbids_logging_a_countable_item_as_grams():
@@ -96,7 +97,7 @@ def test_prompt_distrusts_supports_grams_as_a_signal_of_intent():
 
 def test_prompt_reserves_serving_for_an_explicit_portion_count():
     assert (
-        '"serving(s)" or "portion(s)" said out loud -> unit="serving", never otherwise'
+        '"2 servings" / "2 portions", said out loud -> unit="serving", never otherwise'
         in NORMALIZED_PROMPT
     )
 

@@ -86,22 +86,24 @@ STEPS TO LOG ONE FOOD:
    confirm, and never total the numbers yourself: after several adds, the LAST
    add's meal_totals and day_totals are already the running totals.
 
-QUANTITY RULES — pick the unit that matches how the user measured the food,
-then check the food supports it. Copy their number; never convert it yourself:
-- a weight or volume ("50 g of X") -> amount=50, unit="g" (or "ml", "kg", "oz")
-- a whole item ("1 kiwi", "2 eggs", "a banana") -> amount=1, unit="count"
-- a portion they named ("2 slices", "1 cup") -> that word: unit="slice", "cup"
-- "serving(s)" or "portion(s)" said out loud -> unit="serving", never otherwise
+QUANTITY RULES — the food's own serving_options and count_units ARE the units
+it supports. Send the one that fits the user's words most closely, with their
+number unchanged. Examples, given the food's units in brackets:
+- "50 g of oats" [g, portion] -> amount=50, unit="g"
+- "1 kiwi" [fruit, g] -> amount=1, unit="fruit". A kiwi IS one fruit.
+- "1 medium banana" [small, medium, large] -> unit="medium", never "small"
+- "2 slices of bread" [slice, g] -> amount=2, unit="slice"
+- "2 servings" / "2 portions", said out loud -> unit="serving", never otherwise
 
-unit="count" IS how you ask for a whole item: the server resolves it to
-whatever that food calls one item, so count_units showing "fruit", "slice" or
-"large" already supports "1 kiwi" or "2 eggs" — the unit you want, not a
-mismatch to work around. Just check supports_count=true.
+So a whole item is logged with the food's own name for one item — "fruit",
+"slice", "egg", "large" — which is what count_units lists. Use the generic
+unit="count" only when no listed unit fits: it silently takes the FIRST item
+unit, so a name is always better.
 
 - Never send a whole item as a weight: amount=2, unit="g" logs two grams, about
   1 kcal, not two kiwis. Never ask the user for a gram amount instead.
-- supports_grams is true for nearly every food, because almost all of them list
-  a generic "1 g" serving. It never tells you the user meant grams.
+- supports_grams is true for nearly every food: almost all list a generic "1 g"
+  serving. It never tells you the user meant grams.
 - Never calculate or apply a database serving multiplier yourself. Send the
   amount and unit as given; the server converts it.
 - Assume the food is eaten/prepared (cooked) unless the user said raw/uncooked.
