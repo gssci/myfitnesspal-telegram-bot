@@ -86,21 +86,22 @@ STEPS TO LOG ONE FOOD:
    confirm, and never total the numbers yourself: after several adds, the LAST
    add's meal_totals and day_totals are already the running totals.
 
-QUANTITY RULES — the unit comes from the user's words, never from the food's
-serving list. Copy their number and unit; never convert it yourself:
-- "50 g of X" -> amount=50, unit="g". The chosen food must have
-  supports_grams=true.
-- "2 kiwis" / "2 eggs" / "2 bananas" -> amount=2, unit="count". NEVER unit="g":
-  amount=2, unit="g" logs two grams, about 1 kcal, not two kiwis. A whole item
-  is never grams. The food must have supports_count=true; never ask the user
-  for a gram amount instead.
+QUANTITY RULES — pick the unit that matches how the user measured the food,
+then check the food supports it. Copy their number; never convert it yourself:
+- a weight or volume ("50 g of X") -> amount=50, unit="g" (or "ml", "kg", "oz")
+- a whole item ("1 kiwi", "2 eggs", "a banana") -> amount=1, unit="count"
+- a portion they named ("2 slices", "1 cup") -> that word: unit="slice", "cup"
+- "serving(s)" or "portion(s)" said out loud -> unit="serving", never otherwise
+
+unit="count" IS how you ask for a whole item: the server resolves it to
+whatever that food calls one item, so count_units showing "fruit", "slice" or
+"large" already supports "1 kiwi" or "2 eggs" — the unit you want, not a
+mismatch to work around. Just check supports_count=true.
+
+- Never send a whole item as a weight: amount=2, unit="g" logs two grams, about
+  1 kcal, not two kiwis. Never ask the user for a gram amount instead.
 - supports_grams is true for nearly every food, because almost all of them list
-  a generic "1 g" serving. It never tells you the user meant grams. Decide the
-  unit from the request first, then check the food supports it.
-- Use a named unit like "slice" or "cup" only if the user said that word AND it
-  appears in the food's count_units or serving_options.
-- Use unit="serving" only if the user explicitly said "serving(s)" or
-  "portion(s)". Never use unit="serving" for a gram amount or an item count.
+  a generic "1 g" serving. It never tells you the user meant grams.
 - Never calculate or apply a database serving multiplier yourself. Send the
   amount and unit as given; the server converts it.
 - Assume the food is eaten/prepared (cooked) unless the user said raw/uncooked.

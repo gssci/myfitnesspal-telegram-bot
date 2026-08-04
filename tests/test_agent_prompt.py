@@ -53,28 +53,52 @@ def test_prompt_rejects_implausible_nutrition():
     assert NORMALIZED_PROMPT.count('nutrition_plausibility.status is "implausible"') >= 2
 
 
-def test_prompt_preserves_weight_and_count_units():
-    assert 'amount=50, unit="g"' in NORMALIZED_PROMPT
-    assert 'amount=2, unit="count"' in NORMALIZED_PROMPT
-    assert "never ask the user for a gram amount instead" in NORMALIZED_PROMPT
+def test_prompt_matches_the_unit_to_how_the_user_measured_the_food():
+    # Framed as a positive choice among four kinds of measurement, rather than
+    # a list of prohibitions, so the model has a rule to apply and not just
+    # mistakes to avoid.
     assert (
-        'Never use unit="serving" for a gram amount or an item count' in NORMALIZED_PROMPT
+        "pick the unit that matches how the user measured the food" in NORMALIZED_PROMPT
     )
+    assert 'a weight or volume ("50 g of X") -> amount=50, unit="g"' in NORMALIZED_PROMPT
+    assert 'a whole item ("1 kiwi", "2 eggs", "a banana") -> amount=1, unit="count"' in (
+        NORMALIZED_PROMPT
+    )
+    assert 'a portion they named ("2 slices", "1 cup") -> that word' in NORMALIZED_PROMPT
 
 
-def test_prompt_forbids_logging_a_countable_item_as_grams():
+def test_prompt_treats_a_named_item_serving_as_the_count_unit():
+    # The point that was missing: a food offering "1 fruit" already supports
+    # "1 kiwi". count resolves to it, so that is a match, not an obstacle.
+    assert 'unit="count" IS how you ask for a whole item' in NORMALIZED_PROMPT
+    assert "the server resolves it to whatever that food calls one item" in NORMALIZED_PROMPT
+    assert (
+        'count_units showing "fruit", "slice" or "large" already supports "1 kiwi"'
+        in NORMALIZED_PROMPT
+    )
+    assert "the unit you want, not a mismatch to work around" in NORMALIZED_PROMPT
+
+
+def test_prompt_still_forbids_logging_a_countable_item_as_grams():
     # The exact failure seen in production: "2 kiwis" logged as 2 g, ~1 kcal.
-    # Showing the wrong call and its consequence teaches a small model far more
-    # than restating the right one.
-    assert 'NEVER unit="g": amount=2, unit="g" logs two grams' in NORMALIZED_PROMPT
-    assert "A whole item is never grams" in NORMALIZED_PROMPT
+    assert (
+        'Never send a whole item as a weight: amount=2, unit="g" logs two grams'
+        in NORMALIZED_PROMPT
+    )
+    assert "never ask the user for a gram amount instead" in NORMALIZED_PROMPT.lower()
 
 
 def test_prompt_distrusts_supports_grams_as_a_signal_of_intent():
     # Nearly every MFP food carries a generic "1 g" serving, so the flag says
     # nothing about what the user asked for.
-    assert "the unit comes from the user's words, never from the food's" in NORMALIZED_PROMPT
     assert "It never tells you the user meant grams" in NORMALIZED_PROMPT
+
+
+def test_prompt_reserves_serving_for_an_explicit_portion_count():
+    assert (
+        '"serving(s)" or "portion(s)" said out loud -> unit="serving", never otherwise'
+        in NORMALIZED_PROMPT
+    )
 
 
 def test_prompt_recovers_from_a_wrong_unit_without_changing_food():
