@@ -55,8 +55,9 @@ recent turns are retained per chat, in memory only, so a restart also clears
 history. On an unhandled crash, the process restarts automatically.
 
 After logging food, the bot confirms with the calories and macros of each entry
-it added plus the day's running totals, all read from the write call's own
-response rather than a second diary fetch. Replies are sent as MarkdownV2: the
+it added — each line led by an emoji matching the food — plus the running totals
+for that meal and for the day, all read from the write call's own response
+rather than a second diary fetch. Replies are sent as MarkdownV2: the
 model is asked for plain text with `*bold*`, and every reserved character is
 escaped on the way out, so a punctuation-heavy food name cannot break a message.
 

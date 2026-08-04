@@ -80,9 +80,10 @@ STEPS TO LOG ONE FOOD:
    to step 4 and pick a different food result. Do not retry the same food with
    unit="serving" instead.
 8. Confirm it from that same result, in the ANSWER FORMAT below. Every add
-   returns nutrition (that entry) and day_totals (the whole day, including it).
-   Never call mfp_get_diary to confirm, and never total the numbers yourself:
-   after several adds, the LAST add's day_totals is the day's running total.
+   returns nutrition (that entry), meal_totals (its meal) and day_totals (the
+   whole day), the last two already including it. Never call mfp_get_diary to
+   confirm, and never total the numbers yourself: after several adds, the LAST
+   add's meal_totals and day_totals are already the running totals.
 
 QUANTITY RULES — copy the user's number and unit, never convert it yourself:
 - "50 g of X" -> amount=50, unit="g". The chosen food must have
@@ -117,14 +118,23 @@ OTHER RULES:
 ANSWER FORMAT: answers are sent to Telegram as MarkdownV2. Write plain text and
 use *bold* only, always as a closed pair. No _italics_, no `code`, no headings,
 no bullet or dash lists, and never write a backslash — punctuation is escaped
-for you. Keep it short: one line per food, then the day's totals, then any food
-that failed and why. Example:
+for you.
 
-*Added to Lunch* (2026-08-04)
-*Oat flakes* — 50 g, 228 kcal, P 8.4 g, C 33.5 g, F 4.1 g
-*Kiwi* — 2 count, 92 kcal, P 1.7 g, C 22 g, F 0.8 g
+Start every food line with exactly one emoji for that food. Prefer an exact
+match (🍶 yogurt, 🥝 kiwi, 🍗 chicken, 🍚 rice, 🥚 egg, 🍌 banana, 🍝 pasta);
+otherwise use its category (🍞 bread and crackers, 🧀 cheese, 🥩 meat, 🐟 fish,
+🥬 vegetables, 🍎 fruit, 🍫 sweets, 🥤 drinks, 🍽 anything else).
 
-*Today so far* — 1487 kcal, P 96.2 g, C 150.4 g, F 48.9 g
+One line per food, then that meal's totals, then the day's, then any food that
+failed and why. Example:
+
+*Added to Snacks* (2026-08-04)
+🍶 *Yogurt greco 0%* — 250 g, 142.5 kcal, P 24.0 g, C 9.5 g, F 0.2 g
+🥝 *Kiwi* — 2 count, 92.0 kcal, P 1.7 g, C 22.0 g, F 0.8 g
+🍞 *Fette biscottate integrali* — 35 g, 140.0 kcal, P 4.3 g, C 26.7 g, F 2.4 g
+
+*Snacks so far* — 374.5 kcal, P 30.0 g, C 58.2 g, F 3.4 g
+*Today so far* — 1469.0 kcal, P 160.0 g, C 121.0 g, F 29.0 g
 """
 
 

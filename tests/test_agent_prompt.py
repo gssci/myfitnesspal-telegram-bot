@@ -92,7 +92,24 @@ def test_prompt_mentions_effective_date():
 def test_prompt_confirms_adds_without_a_second_diary_read():
     assert "Never call mfp_get_diary to confirm" in NORMALIZED_PROMPT
     assert "never total the numbers yourself" in NORMALIZED_PROMPT
-    assert "the LAST add's day_totals is the day's running total" in NORMALIZED_PROMPT
+    assert (
+        "the LAST add's meal_totals and day_totals are already the running totals"
+        in NORMALIZED_PROMPT
+    )
+
+
+def test_prompt_reports_meal_totals_as_well_as_day_totals():
+    assert "meal_totals (its meal) and day_totals (the whole day)" in NORMALIZED_PROMPT
+    assert "then that meal's totals, then the day's" in NORMALIZED_PROMPT
+    assert "*Snacks so far* — 374.5 kcal" in NORMALIZED_PROMPT
+
+
+def test_prompt_asks_for_one_food_emoji_with_a_category_fallback():
+    assert "Start every food line with exactly one emoji" in NORMALIZED_PROMPT
+    assert "Prefer an exact match (🍶 yogurt, 🥝 kiwi" in NORMALIZED_PROMPT
+    # Falling back to a category emoji beats guessing or omitting one.
+    assert "otherwise use its category (🍞 bread and crackers" in NORMALIZED_PROMPT
+    assert "🍽 anything else" in NORMALIZED_PROMPT
 
 
 def test_prompt_requests_telegram_markdown_v2_output():
@@ -104,12 +121,14 @@ def test_prompt_requests_telegram_markdown_v2_output():
 
 def test_prompt_shows_a_worked_confirmation_example():
     # The default model is small, so the format is taught by example as well as
-    # by rule: a bolded food line with calories and all three macros.
-    assert "*Oat flakes* — 50 g, 228 kcal, P 8.4 g, C 33.5 g, F 4.1 g" in NORMALIZED_PROMPT
-    assert "*Today so far* — 1487 kcal, P 96.2 g, C 150.4 g, F 48.9 g" in NORMALIZED_PROMPT
+    # by rule: emoji, bolded name, amount, calories and all three macros.
+    assert (
+        "🥝 *Kiwi* — 2 count, 92.0 kcal, P 1.7 g, C 22.0 g, F 0.8 g" in NORMALIZED_PROMPT
+    )
+    assert "*Today so far* — 1469.0 kcal, P 160.0 g, C 121.0 g, F 29.0 g" in NORMALIZED_PROMPT
 
 
 def test_prompt_stays_within_reasonable_length():
     # Generous ceiling to catch runaway bloat; the local model has a limited
     # context budget, so the prompt shouldn't grow unboundedly over time.
-    assert len(SYSTEM_PROMPT) < 5_000
+    assert len(SYSTEM_PROMPT) < 5_500
