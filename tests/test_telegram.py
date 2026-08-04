@@ -11,6 +11,7 @@ from mfp_agent import telegram as telegram_module
 from mfp_agent.telegram import (
     TelegramAgentBot,
     _parse_args,
+    harden_markdown_v2,
     parse_allowed_user_ids,
     run_forever_with_restart,
     send_agent_response,
@@ -35,7 +36,26 @@ def test_split_telegram_text_respects_limit_and_preserves_text():
     assert all(len(chunk) <= 9 for chunk in chunks)
 
 
-def test_agent_response_uses_legacy_markdown_parse_mode():
+def test_harden_markdown_v2_keeps_bold_and_escapes_punctuation():
+    # A realistic confirmation line: the bold pair survives, and the parentheses,
+    # dot and percent-adjacent punctuation that would break MarkdownV2 do not.
+    assert harden_markdown_v2("*Yogurt 0.1%* (170 g) — 96 kcal!") == (
+        "*Yogurt 0\\.1%* \\(170 g\\) — 96 kcal\\!"
+    )
+
+
+def test_harden_markdown_v2_escapes_an_unbalanced_asterisk():
+    # One stray asterisk would make Telegram reject the whole message, so bold
+    # is given up for that chunk rather than risking the send.
+    assert harden_markdown_v2("*Added 50 g") == "\\*Added 50 g"
+
+
+def test_harden_markdown_v2_leaves_existing_escapes_alone():
+    assert harden_markdown_v2(r"2\.5 g") == r"2\.5 g"
+    assert harden_markdown_v2("back\\slash") == "back\\\\slash"
+
+
+def test_agent_response_escapes_and_uses_markdown_v2_parse_mode():
     class FakeMessage:
         def __init__(self):
             self.calls = []
@@ -45,18 +65,18 @@ def test_agent_response_uses_legacy_markdown_parse_mode():
 
     async def exercise():
         message = FakeMessage()
-        await send_agent_response(message, "*Added* _yogurt_")
+        await send_agent_response(message, "*Added to Lunch* (2026-08-04)")
         assert message.calls == [
             (
-                "*Added* _yogurt_",
-                {"parse_mode": ParseMode.MARKDOWN},
+                "*Added to Lunch* \\(2026\\-08\\-04\\)",
+                {"parse_mode": ParseMode.MARKDOWN_V2},
             )
         ]
 
     asyncio.run(exercise())
 
 
-def test_agent_response_falls_back_to_escaped_legacy_markdown():
+def test_agent_response_falls_back_to_fully_escaped_markdown_v2():
     class FakeMessage:
         def __init__(self):
             self.calls = []
@@ -68,10 +88,10 @@ def test_agent_response_falls_back_to_escaped_legacy_markdown():
 
     async def exercise():
         message = FakeMessage()
-        await send_agent_response(message, "*unclosed")
+        await send_agent_response(message, "*Added.*")
         assert message.calls == [
-            ("*unclosed", {"parse_mode": ParseMode.MARKDOWN}),
-            (r"\*unclosed", {"parse_mode": ParseMode.MARKDOWN}),
+            ("*Added\\.*", {"parse_mode": ParseMode.MARKDOWN_V2}),
+            ("\\*Added\\.\\*", {"parse_mode": ParseMode.MARKDOWN_V2}),
         ]
 
     asyncio.run(exercise())
@@ -284,7 +304,7 @@ def test_audio_handler_downloads_converts_and_updates_text_history(monkeypatch):
         assert converted == [b"telegram voice"]
         assert service.histories["telegram:456:123"][0].content == "Voice summary"
         assert message.replies == [
-            ("*Done*", {"parse_mode": ParseMode.MARKDOWN})
+            ("*Done*", {"parse_mode": ParseMode.MARKDOWN_V2})
         ]
 
     asyncio.run(exercise())

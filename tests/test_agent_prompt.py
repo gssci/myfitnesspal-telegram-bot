@@ -89,7 +89,27 @@ def test_prompt_mentions_effective_date():
     assert "Always state which date the entries were logged under" in NORMALIZED_PROMPT
 
 
+def test_prompt_confirms_adds_without_a_second_diary_read():
+    assert "Never call mfp_get_diary to confirm" in NORMALIZED_PROMPT
+    assert "never total the numbers yourself" in NORMALIZED_PROMPT
+    assert "the LAST add's day_totals is the day's running total" in NORMALIZED_PROMPT
+
+
+def test_prompt_requests_telegram_markdown_v2_output():
+    assert "sent to Telegram as MarkdownV2" in NORMALIZED_PROMPT
+    # harden_markdown_v2() does the escaping, so the model must not also try.
+    assert "never write a backslash" in NORMALIZED_PROMPT
+    assert "use *bold* only, always as a closed pair" in NORMALIZED_PROMPT
+
+
+def test_prompt_shows_a_worked_confirmation_example():
+    # The default model is small, so the format is taught by example as well as
+    # by rule: a bolded food line with calories and all three macros.
+    assert "*Oat flakes* — 50 g, 228 kcal, P 8.4 g, C 33.5 g, F 4.1 g" in NORMALIZED_PROMPT
+    assert "*Today so far* — 1487 kcal, P 96.2 g, C 150.4 g, F 48.9 g" in NORMALIZED_PROMPT
+
+
 def test_prompt_stays_within_reasonable_length():
     # Generous ceiling to catch runaway bloat; the local model has a limited
     # context budget, so the prompt shouldn't grow unboundedly over time.
-    assert len(SYSTEM_PROMPT) < 4_500
+    assert len(SYSTEM_PROMPT) < 5_000

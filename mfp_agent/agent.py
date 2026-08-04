@@ -79,6 +79,10 @@ STEPS TO LOG ONE FOOD:
    amount/unit as a calorie or unit-safety problem, that is a failure — go back
    to step 4 and pick a different food result. Do not retry the same food with
    unit="serving" instead.
+8. Confirm it from that same result, in the ANSWER FORMAT below. Every add
+   returns nutrition (that entry) and day_totals (the whole day, including it).
+   Never call mfp_get_diary to confirm, and never total the numbers yourself:
+   after several adds, the LAST add's day_totals is the day's running total.
 
 QUANTITY RULES — copy the user's number and unit, never convert it yourself:
 - "50 g of X" -> amount=50, unit="g". The chosen food must have
@@ -109,6 +113,18 @@ OTHER RULES:
 - Ask the user a question only when two candidate foods are genuinely different
   foods (not just different brands or serving sizes of the same food).
 - Always state which date the entries were logged under in your final answer.
+
+ANSWER FORMAT: answers are sent to Telegram as MarkdownV2. Write plain text and
+use *bold* only, always as a closed pair. No _italics_, no `code`, no headings,
+no bullet or dash lists, and never write a backslash — punctuation is escaped
+for you. Keep it short: one line per food, then the day's totals, then any food
+that failed and why. Example:
+
+*Added to Lunch* (2026-08-04)
+*Oat flakes* — 50 g, 228 kcal, P 8.4 g, C 33.5 g, F 4.1 g
+*Kiwi* — 2 count, 92 kcal, P 1.7 g, C 22 g, F 0.8 g
+
+*Today so far* — 1487 kcal, P 96.2 g, C 150.4 g, F 48.9 g
 """
 
 

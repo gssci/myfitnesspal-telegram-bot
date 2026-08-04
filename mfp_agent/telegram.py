@@ -33,8 +33,14 @@ from .logging_setup import configure_logging
 
 LOGGER = logging.getLogger(__name__)
 TELEGRAM_MESSAGE_LIMIT = 4096
-TELEGRAM_MARKDOWN_CHUNK_LIMIT = 3500
+# Escaping can double a chunk's length, so both limits are held below half of
+# TELEGRAM_MESSAGE_LIMIT to keep the escaped message sendable.
+TELEGRAM_MARKDOWN_CHUNK_LIMIT = 2000
 TELEGRAM_FALLBACK_CHUNK_LIMIT = 1800
+
+# MarkdownV2 reserves these characters: any one of them meant literally has to
+# be backslash-escaped, or Telegram rejects the whole message.
+MARKDOWN_V2_RESERVED = frozenset(r"_*[]()~`>#+-=|{}.!")
 
 # Auto-restart tuning: if the bot process crashes, relaunch it with
 # exponential backoff instead of exiting. The backoff resets once a run has
@@ -84,21 +90,72 @@ def split_telegram_text(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[
     return chunks
 
 
+def count_unescaped_asterisks(text: str) -> int:
+    """Count the asterisks that MarkdownV2 would read as bold markers."""
+    count = 0
+    index = 0
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] == "*":
+            count += 1
+        index += 1
+    return count
+
+
+def harden_markdown_v2(text: str) -> str:
+    """Escape an agent reply for MarkdownV2, keeping balanced *bold* markers.
+
+    The agent is told to write plain text plus ``*bold*``, but a small local
+    model cannot be trusted to escape MyFitnessPal's punctuation-heavy output
+    (``Greek yogurt 0.1% (170 g)``) on every reply. Escaping here instead of in
+    the prompt leaves the model one formatting rule to follow and makes a
+    rejected message very unlikely. Asterisks survive only when they pair up,
+    since a stray one would make Telegram reject the message; any backslash
+    escape the model did emit is left as it is.
+    """
+    keep_bold = count_unescaped_asterisks(text) % 2 == 0
+    escaped: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\\":
+            # Preserve an escape the model already wrote; escape a lone slash.
+            if index + 1 < len(text) and text[index + 1] in MARKDOWN_V2_RESERVED:
+                escaped.append(text[index : index + 2])
+                index += 2
+                continue
+            escaped.append("\\\\")
+        elif char == "*" and keep_bold:
+            escaped.append(char)
+        elif char in MARKDOWN_V2_RESERVED:
+            escaped.append("\\" + char)
+        else:
+            escaped.append(char)
+        index += 1
+    return "".join(escaped)
+
+
 async def send_agent_response(message: Message, text: str) -> None:
-    """Send legacy Markdown, falling back to safely escaped text if parsing fails."""
+    """Send MarkdownV2, falling back to fully escaped text if Telegram refuses."""
+    # Split before escaping so a chunk boundary can never land inside an escape
+    # pair, and so each chunk's escaped length stays within the message limit.
     for chunk in split_telegram_text(text, limit=TELEGRAM_MARKDOWN_CHUNK_LIMIT):
         try:
-            await message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+            await message.reply_text(
+                harden_markdown_v2(chunk), parse_mode=ParseMode.MARKDOWN_V2
+            )
         except BadRequest:
             LOGGER.warning(
-                "Invalid legacy Markdown from agent; sending escaped fallback"
+                "Telegram rejected the agent's MarkdownV2; sending escaped fallback"
             )
             for fallback_chunk in split_telegram_text(
                 chunk, limit=TELEGRAM_FALLBACK_CHUNK_LIMIT
             ):
                 await message.reply_text(
-                    escape_markdown(fallback_chunk, version=1),
-                    parse_mode=ParseMode.MARKDOWN,
+                    escape_markdown(fallback_chunk, version=2),
+                    parse_mode=ParseMode.MARKDOWN_V2,
                 )
 
 
