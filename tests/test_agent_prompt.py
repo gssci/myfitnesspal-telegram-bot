@@ -20,12 +20,14 @@ def test_only_requested_mcp_tools_are_enabled():
     }
 
 
-def test_prompt_distinguishes_meal_argument_formats():
-    # mfp_get_meal_foods/mfp_resolve_meal_food take an integer meal index, but
-    # mfp_add_food_to_diary/mfp_remove_food_from_diary take a meal name string.
-    # Mixing these up is a real, easy-to-make bug.
-    assert "take meal as a NUMBER" in NORMALIZED_PROMPT
-    assert "take meal as a NAME" in NORMALIZED_PROMPT
+def test_prompt_says_every_meal_argument_accepts_either_format():
+    # The tools once split into number-taking (mfp_get_meal_foods,
+    # mfp_resolve_meal_food) and name-taking (mfp_add_food_to_diary,
+    # mfp_remove_food_from_diary), so the prompt had to spell the split out.
+    # Every meal field now runs through normalize_meal_number/normalize_meal_name
+    # via the MealNumber/MealName annotated types, so both spellings validate on
+    # every tool and the model only has to know the number-to-meal mapping.
+    assert "every meal argument accepts either the number" in NORMALIZED_PROMPT
     assert "0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks" in NORMALIZED_PROMPT
 
 
