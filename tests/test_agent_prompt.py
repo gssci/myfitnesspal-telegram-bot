@@ -10,74 +10,66 @@ def test_only_requested_mcp_tools_are_enabled():
     assert ESSENTIAL_MCP_TOOLS == {
         "refresh_browser_cookies",
         "mfp_get_diary",
+        "mfp_log_food",
         "mfp_add_food_to_diary",
         "mfp_remove_food_from_diary",
         "mfp_get_meal_foods",
-        "mfp_resolve_meal_food",
         "mfp_search_food",
-        "mfp_get_food_details",
         "mfp_get_report",
     }
 
 
+def test_the_steps_mfp_log_food_absorbed_are_no_longer_advertised():
+    # Resolving a history_id and reading a food's details were only ever stages
+    # of a lookup the server now runs itself, and every advertised tool costs
+    # its whole JSON schema on every model call.
+    assert "mfp_resolve_meal_food" not in ESSENTIAL_MCP_TOOLS
+    assert "mfp_get_food_details" not in ESSENTIAL_MCP_TOOLS
+
+
 def test_prompt_says_every_meal_argument_accepts_either_format():
-    # The tools once split into number-taking (mfp_get_meal_foods,
-    # mfp_resolve_meal_food) and name-taking (mfp_add_food_to_diary,
-    # mfp_remove_food_from_diary), so the prompt had to spell the split out.
-    # Every meal field now runs through normalize_meal_number/normalize_meal_name
-    # via the MealNumber/MealName annotated types, so both spellings validate on
-    # every tool and the model only has to know the number-to-meal mapping.
     assert "every meal argument accepts either the number" in NORMALIZED_PROMPT
     assert "0=Breakfast, 1=Lunch, 2=Dinner, 3=Snacks" in NORMALIZED_PROMPT
 
 
-def test_prompt_never_passes_history_id_to_add():
-    assert "mfp_add_food_to_diary only accepts an mfp_id" in NORMALIZED_PROMPT
-    assert "Never pass a history_id to it" in NORMALIZED_PROMPT
+def test_prompt_logs_through_one_call_per_food():
+    # The four-turn loop (history, resolve, search, add) is what made a
+    # three-food request cost eight model round trips.
+    assert "call mfp_log_food once per distinct food, and nothing else" in NORMALIZED_PROMPT
+    assert "Do not look the food up first" in NORMALIZED_PROMPT
 
 
-def test_prompt_prefers_recent_foods_before_search():
-    assert "Call mfp_get_meal_foods once for that food's meal" in NORMALIZED_PROMPT
-    assert "Call mfp_search_food instead when" in NORMALIZED_PROMPT
-
-
-def test_prompt_never_trades_food_identity_for_unit_support():
-    assert "identity matters more than unit support" in NORMALIZED_PROMPT
+def test_prompt_keeps_the_lookup_tools_out_of_the_logging_path():
     assert (
-        "Do not pick a different, loosely-related food just because its units fit"
-        in NORMALIZED_PROMPT
+        "mfp_search_food and mfp_get_meal_foods are for answering questions about "
+        "the diary, never a step on the way to logging" in NORMALIZED_PROMPT
     )
 
 
-def test_prompt_rejects_implausible_nutrition():
-    assert NORMALIZED_PROMPT.count('nutrition_plausibility.status is "implausible"') >= 2
+def test_prompt_reads_the_rejection_reasons_before_retrying():
+    # "considered" is what lets a failed call be fixed rather than repeated.
+    assert '"considered" names the foods it turned down and why' in NORMALIZED_PROMPT
+    assert "If every why_not is about the unit" in NORMALIZED_PROMPT
+    assert "call it again for the SAME food" in NORMALIZED_PROMPT
 
 
-def test_prompt_chooses_from_the_units_the_food_itself_supports():
-    # The food's serving_options/count_units are the menu; the job is choosing
-    # the closest fit, not deciding a unit and then hoping the food takes it.
-    assert (
-        "the food's own serving_options and count_units ARE the units it supports"
-        in NORMALIZED_PROMPT
-    )
-    assert "the one that fits the user's words most closely" in NORMALIZED_PROMPT
-    assert '"1 kiwi" [fruit, g] -> amount=1, unit="fruit"' in NORMALIZED_PROMPT
-    assert "A kiwi IS one fruit" in NORMALIZED_PROMPT
-    assert '"2 slices of bread" [slice, g] -> amount=2, unit="slice"' in NORMALIZED_PROMPT
-
-
-def test_prompt_picks_the_right_item_size_rather_than_the_first():
-    # unit="count" takes the FIRST item serving, so on [small, medium, large] it
-    # would log a small banana for "1 medium banana". Naming the unit is the
-    # only way to say which item was meant.
-    assert (
-        '"1 medium banana" [small, medium, large] -> unit="medium", never "small"'
-        in NORMALIZED_PROMPT
-    )
-    assert 'Use the generic unit="count" only when no listed unit fits' in NORMALIZED_PROMPT
-    assert "it silently takes the FIRST item unit, so a name is always better" in (
+def test_prompt_chooses_the_unit_from_the_users_own_words():
+    # The caller no longer sees a food's serving table before naming a unit, so
+    # the rule is about the request, not about the candidate.
+    assert "send the user's number unchanged, with the unit their own words point at" in (
         NORMALIZED_PROMPT
     )
+    assert '"50 g of oats" -> amount=50, unit="g"' in NORMALIZED_PROMPT
+    assert '"2 slices of bread" -> amount=2, unit="slice"' in NORMALIZED_PROMPT
+
+
+def test_prompt_counts_a_whole_item_and_keeps_a_named_size():
+    # unit="count" takes the food's first item serving, which is right for a
+    # bare "1 kiwi" and wrong for "1 medium banana" on [small, medium, large].
+    assert '"1 kiwi" -> amount=1, unit="count"' in NORMALIZED_PROMPT
+    assert "A whole item with no size word is a count" in NORMALIZED_PROMPT
+    assert '"1 medium banana" -> amount=1, unit="medium"' in NORMALIZED_PROMPT
+    assert "A size word IS the unit" in NORMALIZED_PROMPT
 
 
 def test_prompt_still_forbids_logging_a_countable_item_as_grams():
@@ -89,12 +81,6 @@ def test_prompt_still_forbids_logging_a_countable_item_as_grams():
     assert "never ask the user for a gram amount instead" in NORMALIZED_PROMPT.lower()
 
 
-def test_prompt_distrusts_supports_grams_as_a_signal_of_intent():
-    # Nearly every MFP food carries a generic "1 g" serving, so the flag says
-    # nothing about what the user asked for.
-    assert "It never tells you the user meant grams" in NORMALIZED_PROMPT
-
-
 def test_prompt_reserves_serving_for_an_explicit_portion_count():
     assert (
         '"2 servings" / "2 portions", said out loud -> unit="serving", never otherwise'
@@ -102,26 +88,13 @@ def test_prompt_reserves_serving_for_an_explicit_portion_count():
     )
 
 
-def test_prompt_recovers_from_a_wrong_unit_without_changing_food():
-    assert "resend the SAME food with the right unit" in NORMALIZED_PROMPT
-    assert "Only a rejection about the food itself" in NORMALIZED_PROMPT
-
-
 def test_prompt_forbids_serving_multiplier_math():
     assert "Never calculate or apply a database serving multiplier yourself" in NORMALIZED_PROMPT
 
 
 def test_prompt_supports_multiple_food_entries_and_reports_partial_failures():
-    assert (
-        "resolve and add each distinct food independently, once each" in NORMALIZED_PROMPT
-    )
+    assert "one mfp_log_food call per distinct food, once each" in NORMALIZED_PROMPT
     assert "report which ones failed and why" in NORMALIZED_PROMPT
-
-
-def test_prompt_checks_write_result_before_claiming_success():
-    assert "Only say it succeeded if success is true AND" in NORMALIZED_PROMPT
-    assert "requested_amount/requested_unit match what you sent" in NORMALIZED_PROMPT
-    assert 'never fall back to unit="serving"' in NORMALIZED_PROMPT
 
 
 def test_prompt_refreshes_cookies_only_after_auth_error():
@@ -140,7 +113,7 @@ def test_prompt_confirms_adds_without_a_second_diary_read():
     assert "Never call mfp_get_diary to confirm" in NORMALIZED_PROMPT
     assert "never total the numbers yourself" in NORMALIZED_PROMPT
     assert (
-        "the LAST add's meal_totals and day_totals are already the running totals"
+        "the LAST result's meal_totals and day_totals are already the running totals"
         in NORMALIZED_PROMPT
     )
 
@@ -176,8 +149,8 @@ def test_prompt_shows_a_worked_confirmation_example():
 
 
 def test_prompt_stays_within_reasonable_length():
-    # Generous ceiling to catch runaway bloat; the local model has a limited
-    # context budget, so the prompt shouldn't grow unboundedly over time.
-    # Raised deliberately as the answer format and the unit rules were added.
-    # Prefer tightening the wording over raising this again.
-    assert len(SYSTEM_PROMPT) < 6_000
+    # This sits ahead of the tool schemas and the whole conversation in every
+    # single model call, so it is the most expensive text in the system.
+    # Lowered once mfp_log_food absorbed the ID plumbing and the candidate
+    # ranking. Prefer tightening the wording over raising it again.
+    assert len(SYSTEM_PROMPT) < 4_500

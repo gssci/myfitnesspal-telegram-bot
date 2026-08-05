@@ -29,16 +29,19 @@ SUPPORTED_BACKENDS = (BACKEND_LLAMA_SERVER, BACKEND_OLLAMA)
 DEFAULT_BACKEND = BACKEND_LLAMA_SERVER
 DEFAULT_MODEL = "gemma-4-e4b"
 
+# mfp_log_food does the search-resolve-rank-add loop server side, so the tools
+# that were only ever steps of it — mfp_resolve_meal_food, mfp_get_food_details
+# — are no longer worth their schema in every prompt. They stay registered on
+# the MCP server for direct use.
 ESSENTIAL_MCP_TOOLS = frozenset(
     {
         "refresh_browser_cookies",
         "mfp_get_diary",
+        "mfp_log_food",
         "mfp_add_food_to_diary",
         "mfp_remove_food_from_diary",
         "mfp_get_meal_foods",
-        "mfp_resolve_meal_food",
         "mfp_search_food",
-        "mfp_get_food_details",
         "mfp_get_report",
     }
 )
@@ -50,77 +53,47 @@ MEAL ARGUMENT: every meal argument accepts either the number (0=Breakfast,
 1=Lunch, 2=Dinner, 3=Snacks) or the name ("Breakfast", "Lunch", "Dinner",
 "Snacks"). Use whichever form that tool's own description asks for.
 
-ID RULES:
-- mfp_get_meal_foods returns a history_id. It cannot be added directly.
-- Pass that history_id to mfp_resolve_meal_food to get an add-ready mfp_id.
-- mfp_search_food also returns an add-ready mfp_id directly.
-- mfp_add_food_to_diary only accepts an mfp_id. Never pass a history_id to it.
+TO LOG FOOD: call mfp_log_food once per distinct food, and nothing else. It
+searches that meal's history and then the food database itself, picks the
+closest match that supports your unit, and writes the entry. Do not look the
+food up first — mfp_search_food and mfp_get_meal_foods are for answering
+questions about the diary, never a step on the way to logging.
 
-STEPS TO LOG ONE FOOD:
-1. Call mfp_get_meal_foods once for that food's meal. If you already called it
-   for this meal for an earlier food in this same request, reuse that result —
-   do not call it again.
-2. Look for an exact match in that result: same food, same brand, same
-   preparation as the user described. If found, call mfp_resolve_meal_food with
-   its history_id.
-3. Call mfp_search_food instead when: no exact match exists in step 2, step 2's
-   resolve failed, or its nutrition_plausibility.status is "implausible".
-4. From search results, first pick the result with the correct food identity and
-   preparation — identity matters more than unit support. Only then check units.
-   - If the correct-identity result does not support the unit you need, search
-     again with a more specific query (add brand, preparation, or unit words).
-     Do not pick a different, loosely-related food just because its units fit.
-   - Never pick a result whose nutrition_plausibility.status is "implausible".
-5. Call mfp_get_food_details only if you still need more information to decide
-   between results.
-6. Call mfp_add_food_to_diary once with the chosen mfp_id.
-7. Check the result. Only say it succeeded if success is true AND
-   requested_amount/requested_unit match what you sent. A rejection naming the
-   unit — "not a real portion", or listing the units the food supports — means
-   resend the SAME food with the right unit, usually unit="count"; never fall
-   back to unit="serving". Only a rejection about the food itself, such as
-   implausible nutrition, sends you back to step 4 for a different food.
-8. Confirm it from that same result, in the ANSWER FORMAT below. Every add
-   returns nutrition (that entry), meal_totals (its meal) and day_totals (the
-   whole day), the last two already including it. Never call mfp_get_diary to
-   confirm, and never total the numbers yourself: after several adds, the LAST
-   add's meal_totals and day_totals are already the running totals.
+Then check the result:
+- success true: confirm it in the ANSWER FORMAT below, using the message,
+  nutrition (that entry), meal_totals (its meal) and day_totals (the whole
+  day), the last two already including it. Never call mfp_get_diary to confirm,
+  and never total the numbers yourself: after several foods, the LAST result's
+  meal_totals and day_totals are already the running totals.
+- success false: "considered" names the foods it turned down and why. If every
+  why_not is about the unit, call it again for the SAME food with a unit that
+  fits what those foods list. Otherwise describe the food differently — add
+  the brand, the preparation — and call it again once.
 
-QUANTITY RULES — the food's own serving_options and count_units ARE the units
-it supports. Send the one that fits the user's words most closely, with their
-number unchanged. Examples, given the food's units in brackets:
-- "50 g of oats" [g, portion] -> amount=50, unit="g"
-- "1 kiwi" [fruit, g] -> amount=1, unit="fruit". A kiwi IS one fruit.
-- "1 medium banana" [small, medium, large] -> unit="medium", never "small"
-- "2 slices of bread" [slice, g] -> amount=2, unit="slice"
+QUANTITY RULES — send the user's number unchanged, with the unit their own
+words point at:
+- "50 g of oats" -> amount=50, unit="g". Weights and volumes use g/kg/ml.
+- "1 kiwi" -> amount=1, unit="count". A whole item with no size word is a count.
+- "1 medium banana" -> amount=1, unit="medium". A size word IS the unit.
+- "2 slices of bread" -> amount=2, unit="slice"
 - "2 servings" / "2 portions", said out loud -> unit="serving", never otherwise
-
-So a whole item is logged with the food's own name for one item — "fruit",
-"slice", "egg", "large" — which is what count_units lists. Use the generic
-unit="count" only when no listed unit fits: it silently takes the FIRST item
-unit, so a name is always better.
 
 - Never send a whole item as a weight: amount=2, unit="g" logs two grams, about
   1 kcal, not two kiwis. Never ask the user for a gram amount instead.
-- supports_grams is true for nearly every food: almost all list a generic "1 g"
-  serving. It never tells you the user meant grams.
 - Never calculate or apply a database serving multiplier yourself. Send the
   amount and unit as given; the server converts it.
 - Assume the food is eaten/prepared (cooked) unless the user said raw/uncooked.
 
-MULTIPLE FOODS: resolve and add each distinct food independently, once each. If
-one fails, still add the others, then report which ones failed and why.
+MULTIPLE FOODS: one mfp_log_food call per distinct food, once each. If one
+fails, still log the others, then report which ones failed and why.
 
 OTHER RULES:
-- Use tools for all account data and changes. Batch independent read calls
-  together instead of calling them one at a time.
+- Use tools for all account data and changes.
 - Call refresh_browser_cookies only after a tool returns an authentication or
   session error — never before, and never as a first step. Then retry the exact
   same call once. An authentication error never means the food is missing, so
   never respond to one by changing the query, picking another food, or giving up
   on that food.
-- mfp_get_meal_foods reporting recent_count 0 and frequent_count 0 is a real
-  answer, not a failure: go straight to mfp_search_food for that meal.
 - Ask the user a question only when two candidate foods are genuinely different
   foods (not just different brands or serving sizes of the same food).
 - Always state which date the entries were logged under in your final answer.
@@ -131,7 +104,7 @@ no bullet or dash lists, and never write a backslash — punctuation is escaped
 for you.
 
 Start every food line with exactly one emoji for that food. Prefer an exact
-match (🍶 yogurt, 🥝 kiwi, 🍗 chicken, 🍚 rice, 🥚 egg, 🍌 banana, 🍝 pasta);
+match (🍶 yogurt, 🥝 kiwi, 🍗 chicken, 🍚 rice, 🥚 egg, 🍌 banana, 🍝 pasta, 🥦 broccoli);
 otherwise use its category (🍞 bread and crackers, 🧀 cheese, 🥩 meat, 🐟 fish,
 🥬 vegetables, 🍎 fruit, 🍫 sweets, 🥤 drinks, 🍽 anything else).
 

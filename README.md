@@ -16,7 +16,11 @@ fork of AdamWalt's original repo.
 ## Prerequisites
 
 - llama-server exposing its OpenAI-compatible API at `http://127.0.0.1:8081`,
-  with the Gemma 4 multimodal projector loaded.
+  with the Gemma 4 multimodal projector loaded. Run it with `--parallel 1`:
+  the bot is a single conversation, and extra slots make consecutive turns land
+  on different ones, evicting the prompt cache that the turn before it filled.
+  (`--cache-reuse` would help too, but llama-server disables it whenever a
+  multimodal projector is loaded.)
 - `ffmpeg` on `PATH`, for Telegram audio conversion.
 - The [myfitnesspal-mcp-python](https://github.com/gssci/myfitnesspal-mcp-python)
   project, with its Python environment set up at the path referenced in `mcp.json`.
@@ -76,6 +80,25 @@ The LLM connection (`OPENAI_MODEL`, `OPENAI_BASE_URL` — must include the `/v1`
 suffix, `OPENAI_API_KEY`) and optional limits (`OPENAI_MAX_TOKENS`,
 `MFP_AGENT_RECURSION_LIMIT`) are set in `.env`; the MCP server command,
 arguments, environment, and transport are configured in `mcp.json`.
-`MFP_AGENT_TIMEZONE` (default `Europe/Rome`) controls the local time used to
-resolve relative dates, recomputed before every model call so a long-running
-server stays correct across midnight and daylight-saving changes.
+`MFP_AGENT_TIMEZONE` (default `Europe/Rome`) controls the local calendar date
+used to resolve relative dates, recomputed before every model call so a
+long-running server stays correct across midnight.
+
+## Prompt cost
+
+The prompt is re-read by the model on every turn of a request, so its size is
+multiplied by the number of tool calls a request makes. Two things follow, and
+both are deliberate in this codebase:
+
+- **The static prefix must not change.** The system prompt sits ahead of the
+  tool schemas and the whole conversation, so a single changed token in it
+  invalidates the server's cache for everything after. The temporal anchor
+  therefore carries a calendar date and no clock time: it used to carry a
+  second-precision timestamp, which meant ~1,700 tokens of prefix were reused
+  and ~23,000 reprocessed on every turn — 148k tokens of prompt processing for
+  one three-food request, over 95% of its wall time.
+- **Tool results must be small, and few.** Anything a tool returns is carried
+  for the rest of the request. `mfp_log_food` exists for this reason: it runs
+  the whole search-rank-add loop server side, so logging a food costs one model
+  round trip and one small confirmation rather than four turns and a full
+  candidate listing in context.

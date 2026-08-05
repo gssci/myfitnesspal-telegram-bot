@@ -11,7 +11,6 @@ def test_temporal_context_includes_relative_date_anchors():
         datetime(2026, 7, 29, 0, 5, 30),
         timezone=ZoneInfo("Europe/Rome"),
     )
-    assert "Local time: 2026-07-29T00:05:30+02:00" in context
     assert "Today=2026-07-29" in context
     assert "yesterday=2026-07-28" in context
     assert "tomorrow=2026-07-30" in context
@@ -23,8 +22,25 @@ def test_aware_datetime_is_converted_to_configured_timezone():
         datetime(2026, 7, 28, 22, 30, tzinfo=timezone.utc),
         timezone=ZoneInfo("Europe/Rome"),
     )
-    assert "Local time: 2026-07-29T00:30:00+02:00" in context
+    assert "Today=2026-07-29" in context
     assert "yesterday=2026-07-28" in context
+
+
+def test_the_anchor_is_stable_across_calls_on_the_same_day():
+    """The prompt sits ahead of the tools and the whole conversation.
+
+    A clock time here changed on every model call, invalidating the server's
+    prompt cache from that token onward and forcing the entire rest of the
+    prompt to be reprocessed every turn.
+    """
+    morning = build_temporal_context(
+        datetime(2026, 7, 29, 8, 15, 42), timezone=ZoneInfo("Europe/Rome")
+    )
+    evening = build_temporal_context(
+        datetime(2026, 7, 29, 21, 59, 3), timezone=ZoneInfo("Europe/Rome")
+    )
+
+    assert morning == evening
 
 
 def test_timezone_is_configurable(monkeypatch):
